@@ -16,6 +16,9 @@
 #include "Image.h"
 #include "MetadataModule.h"
 #include "MetadataUtil.h"
+#include "DifferentialHybridImage.h"
+#include "ConsistentAOTHomologousImage.h"
+#include "SuperSetAOTHomologousImage.h"
 
 namespace hybridclr
 {
@@ -45,19 +48,7 @@ namespace metadata
         }
     }
 
-    static Il2CppAssembly* CreatePlaceHolderAssembly(const char* assemblyName)
-    {
-        auto ass = new (IL2CPP_MALLOC_ZERO(sizeof(Il2CppAssembly))) Il2CppAssembly;
-        auto image2 = new (IL2CPP_MALLOC_ZERO(sizeof(Il2CppImage))) Il2CppImage;
-        ass->image = image2;
-        ass->image->name = CopyString(assemblyName);
-        ass->image->nameNoExt = ass->aname.name = CreateAssemblyNameWithoutExt(assemblyName);
-        image2->assembly = ass;
-        s_placeHolderAssembies.push_back(ass);
-        return ass;
-    }
-
-    static Il2CppAssembly* FindPlaceHolderAssembly(const char* assemblyNameNoExt)
+    static Il2CppAssembly* FindPlaceHolderAssemblyLocked(const char* assemblyNameNoExt, il2cpp::os::FastAutoLock& lock)
     {
         for (Il2CppAssembly* ass : s_placeHolderAssembies)
         {
@@ -69,14 +60,28 @@ namespace metadata
         return nullptr;
     }
 #else
-    static Il2CppAssembly* FindPlaceHolderAssembly(const char* assemblyNameNoExt)
+    static Il2CppAssembly* FindPlaceHolderAssemblyLocked(const char* assemblyNameNoExt, il2cpp::os::FastAutoLock& lock)
     {
         return nullptr;
     }
 #endif
 
+
+    static Il2CppAssembly* CreatePlaceHolderAssembly(const char* assemblyName, il2cpp::os::FastAutoLock& lock)
+    {
+        auto ass = new (IL2CPP_MALLOC_ZERO(sizeof(Il2CppAssembly))) Il2CppAssembly;
+        auto image2 = new (IL2CPP_MALLOC_ZERO(sizeof(Il2CppImage))) Il2CppImage;
+        ass->image = image2;
+        ass->image->name = CopyString(assemblyName);
+        ass->image->nameNoExt = ass->aname.name = CreateAssemblyNameWithoutExt(assemblyName);
+        image2->assembly = ass;
+        s_placeHolderAssembies.push_back(ass);
+        return ass;
+    }
+
     Il2CppAssembly* Assembly::LoadFromFile(const char* assemblyFile)
     {
+        il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
 #if ENABLE_PLACEHOLDER_DLL == 1
         // if pass an assembly name, 
         if (std::strstr(assemblyFile, "/") || std::strstr(assemblyFile, "\\"))
@@ -87,7 +92,7 @@ namespace metadata
         {
             return nullptr;
         }
-        return CreatePlaceHolderAssembly(assemblyFile);
+        return CreatePlaceHolderAssembly(assemblyFile, lock);
 #else
         return nullptr;
 #endif
@@ -136,7 +141,7 @@ namespace metadata
 
         Il2CppAssembly* ass;
         Il2CppImage* image2;
-        if ((ass = FindPlaceHolderAssembly(nameNoExt)) != nullptr)
+        if ((ass = FindPlaceHolderAssemblyLocked(nameNoExt, lock)) != nullptr)
         {
             if (ass->token)
             {
@@ -164,6 +169,140 @@ namespace metadata
         image->InitRuntimeMetadatas();
 
         return ass;
+    }
+
+    LoadImageErrorCode Assembly::LoadMetadataForAOTAssembly(const void* dllBytes, uint32_t dllSize, HomologousImageMode mode)
+    {
+        il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+
+        AOTHomologousImage* image = nullptr;
+        switch (mode)
+        {
+        case HomologousImageMode::CONSISTENT: image = new ConsistentAOTHomologousImage(); break;
+        case HomologousImageMode::SUPERSET: image = new SuperSetAOTHomologousImage(); break;
+        default: return LoadImageErrorCode::INVALID_HOMOLOGOUS_MODE;
+        }
+
+        LoadImageErrorCode err = image->Load((byte*)CopyBytes(dllBytes, dllSize), dllSize);
+        if (err != LoadImageErrorCode::OK)
+        {
+            return err;
+        }
+        if (AOTHomologousImage::FindImageByAssemblyLocked(image->GetAOTAssembly(), lock))
+        {
+            return LoadImageErrorCode::HOMOLOGOUS_ASSEMBLY_HAS_BEEN_LOADED;
+        }
+        image->InitRuntimeMetadatas();
+        AOTHomologousImage::RegisterLocked(image, lock);
+        return LoadImageErrorCode::OK;
+    }
+
+    static bool IsDifferentialHybridAssembly(const char* assemblyName)
+    {
+
+        for (const char** ptrAotAss = g_differentialHybridAssemblies; *ptrAotAss; ptrAotAss++)
+        {
+            if (std::strcmp(*ptrAotAss, assemblyName) == 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    void Assembly::InitializeDifferentialHybridAssembles()
+    {
+#if HYBRIDCLR_ENABLE_DHE
+        il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+
+        std::vector<Il2CppAssembly*> dheAssemblies;
+        for (const char** ptrAotAss = g_differentialHybridAssemblies; *ptrAotAss; ptrAotAss++)
+        {
+            Il2CppAssembly* aotAss = const_cast<Il2CppAssembly*>(il2cpp::vm::Assembly::GetLoadedAssembly(*ptrAotAss));
+            if (!aotAss)
+            {
+                continue;
+            }
+            Il2CppAssembly* dheAss = CreatePlaceHolderAssembly(*ptrAotAss, lock);
+            dheAssemblies.push_back(dheAss);
+            aotAss->dheAssembly = dheAss;
+            aotAss->originAssembly = nullptr;
+            dheAss->originAssembly = aotAss;
+            dheAss->dheAssembly = nullptr;
+        }
+        for (Il2CppAssembly* ass : dheAssemblies)
+        {
+            il2cpp::vm::Assembly::Register(ass);
+        }
+#endif
+    }
+
+    LoadImageErrorCode Assembly::LoadDifferentialHybridAssembly(const void* assemblyData, uint32_t length, const void* optionData, uint32_t optionCount)
+    {
+        il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+
+        if (!assemblyData)
+        {
+            il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetArgumentNullException("rawAssembly is null"));
+        }
+        if (!optionData)
+        {
+            il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetArgumentNullException("optionData is null"));
+        }
+
+        uint32_t imageId = InterpreterImage::AllocImageIndex();
+        if (imageId > kMaxLoadImageCount)
+        {
+            il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetArgumentException("exceed max image index", ""));
+        }
+        DifferentialHybridOption options = {};
+        BlobReader reader((byte*)optionData, optionCount);
+        if (!options.Unmarshal(reader))
+        {
+            return LoadImageErrorCode::DIFFERENTIAL_HYBRID_ASSEMBLY_BAD_OPTION_DATA;
+        }
+        DifferentialHybridImage* image = new DifferentialHybridImage(imageId, options);
+
+        assemblyData = (const byte*)CopyBytes(assemblyData, length);
+        LoadImageErrorCode err = image->Load(assemblyData, (size_t)length);
+
+
+        if (err != LoadImageErrorCode::OK)
+        {
+            IL2CPP_FREE((void*)assemblyData);
+            TEMP_FORMAT(errMsg, "LoadImageErrorCode:%d", (int)err);
+            il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetBadImageFormatException(errMsg));
+            // when load a bad image, mean a fatal error. we don't clean image on purpose.
+        }
+
+        TbAssembly data = image->GetRawImage().ReadAssembly(1);
+        const char* nameNoExt = image->GetStringFromRawIndex(data.name);
+
+        if (!IsDifferentialHybridAssembly(nameNoExt))
+        {
+            return LoadImageErrorCode::DIFFERENTIAL_HYBRID_ASSEMBLY_NOT_DIFFERENTIAL_HYBRID_ASSEMBLY;
+        }
+
+        Il2CppAssembly* ass = FindPlaceHolderAssemblyLocked(nameNoExt, lock);
+        IL2CPP_ASSERT(ass);
+        if (ass->token)
+        {
+            RaiseExecutionEngineException("reloading differential hybrid assembly is not supported!");
+        }
+
+        Il2CppImage* image2 = ass->image;
+        image->InitBasic(image2);
+        image->BuildIl2CppAssembly(ass);
+
+        image->BuildIl2CppImage(image2, ass->originAssembly);
+        image2->name = ConcatNewString(ass->aname.name, ".dll");
+        image2->nameNoExt = ass->aname.name;
+
+        image->InitRuntimeMetadatas();
+
+
+        return LoadImageErrorCode::OK;
     }
 }
 }

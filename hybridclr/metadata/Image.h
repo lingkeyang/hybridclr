@@ -43,6 +43,18 @@ namespace metadata
 			return _rawImage;
 		}
 
+		template<typename T>
+		T* MallocMetadata()
+		{
+			return MallocMetadataWithoutLock<T>();
+		}
+
+		template<typename T>
+		T* CallocMetadata(size_t count)
+		{
+			return CallocMetadataWithoutLock<T>(count);
+		}
+
 		// misc
 		bool IsValueTypeFromToken(TableType tableType, uint32_t rowIndex);
 		bool IsThreadStaticCtorToken(TableType tableType, uint32_t rowIndex);

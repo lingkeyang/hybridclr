@@ -6,9 +6,19 @@
 extern "C"
 {
 
+	IL2CPP_EXPORT int32_t DEFAULT_CALL RuntimeApi_LoadDifferentialHybridAssembly(const void* dllBytes, uint32_t dllSize, const void* optionData, uint32_t optionCount)
+	{
+#if HYBRIDCLR_ENABLE_DHE
+		return (int32_t)hybridclr::metadata::Assembly::LoadDifferentialHybridAssembly(dllBytes, dllSize, optionData, optionCount);
+#else
+		hybridclr::RaiseExecutionEngineException("not enable DifferentialHybridExecution mode");
+		return 0;
+#endif
+	}
+
 	IL2CPP_EXPORT int32_t DEFAULT_CALL RuntimeApi_LoadMetadataForAOTAssembly(void* dllBytes, uint32_t dllSize, int32_t mode)
 	{
-		return (int32_t)hybridclr::metadata::MetadataModule::LoadMetadataForAOTAssembly(dllBytes, dllSize, (hybridclr::metadata::HomologousImageMode)mode);
+		return (int32_t)hybridclr::metadata::Assembly::LoadMetadataForAOTAssembly(dllBytes, dllSize, (hybridclr::metadata::HomologousImageMode)mode);
 	}
 
 	IL2CPP_EXPORT uint32_t DEFAULT_CALL RuntimeApi_GetInterpreterThreadObjectStackSize()

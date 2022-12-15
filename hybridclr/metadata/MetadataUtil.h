@@ -2,6 +2,7 @@
 #include <tuple>
 
 #include "vm/GlobalMetadata.h"
+#include "vm/MetadataAlloc.h"
 #include "vm/Exception.h"
 #include "utils/HashUtils.h"
 #include "metadata/Il2CppTypeHash.h"
@@ -309,15 +310,19 @@ namespace metadata
     bool IsMatchMethodSig(const MethodInfo* methodDef, const MethodRefSig& resolveSig, const Il2CppGenericContainer* klassGenericContainer);
     bool IsMatchMethodSig(const MethodInfo* methodDef, const MethodRefSig& resolveSig, const Il2CppType** klassInstArgv, const Il2CppType** methodInstArgv);
 
-    inline Il2CppType* CloneIl2CppType(const Il2CppType* type)
-    {
-        Il2CppType* newType = (Il2CppType*)IL2CPP_MALLOC(sizeof(Il2CppType));
-        *newType = *type;
-        return newType;
-    }
 
     Il2CppGenericInst* TryInflateGenericInst(Il2CppGenericInst* inst, const Il2CppGenericContext* genericContext);
 
+    class InterpreterImage;
+
+    bool IsDifferentialHybridImage(const InterpreterImage* image);
+
+    bool IsDifferentialHybridImage(const Il2CppImage* image);
+
+    inline bool IsAOTImageDifferentialHbyridImage(const Il2CppImage* image)
+    {
+        return image->assembly->dheAssembly;
+    }
 #pragma endregion
 
 
@@ -403,5 +408,34 @@ namespace metadata
         }
     };
 
+    template<typename T>
+    inline T* MallocMetadataWithLock()
+    {
+        il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+        T* mem = (T*)il2cpp::vm::MetadataMalloc(sizeof(T));
+        *mem = {};
+        return mem;
+    }
+
+    template<typename T>
+    inline T* MallocMetadataWithoutLock()
+    {
+        T* mem = (T*)il2cpp::vm::MetadataMalloc(sizeof(T));
+        *mem = {};
+        return mem;
+    }
+
+    template<typename T>
+    inline T* CallocMetadataWithLock(size_t count)
+    {
+        il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+        return (T*)il2cpp::vm::MetadataCalloc(count, sizeof(T));
+    }
+
+    template<typename T>
+    inline T* CallocMetadataWithoutLock(size_t count)
+    {
+        return (T*)il2cpp::vm::MetadataCalloc(count, sizeof(T));
+    }
 }
 }

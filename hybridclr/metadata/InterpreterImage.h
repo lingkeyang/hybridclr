@@ -278,6 +278,12 @@ namespace metadata
 		Il2CppClass* GetNestedTypeFromOffset(const Il2CppClass* klass, TypeNestedTypeIndex offset);
 		Il2CppClass* GetNestedTypeFromOffset(const Il2CppTypeDefinition* typeDef, TypeNestedTypeIndex offset);
 
+		int32_t GetMethodDefinitionRawIndex(const Il2CppMethodDefinition* methodDef)
+		{
+			IL2CPP_ASSERT(DecodeImageIndex(methodDef->declaringType) == GetIndex());
+			return (int32_t)(methodDef - &_methodDefines[0]);
+		}
+
 		const MethodInfo* GetMethodInfoFromMethodDefinitionRawIndex(uint32_t index);
 		const MethodInfo* GetMethodInfoFromMethodDefinition(const Il2CppMethodDefinition* methodDef);
 		const Il2CppMethodDefinition* GetMethodDefinitionFromVTableSlot(const Il2CppTypeDefinition* typeDefine, int32_t vTableSlot);

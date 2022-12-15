@@ -9,6 +9,7 @@
 #include "metadata/GenericMetadata.h"
 
 #include "Image.h"
+#include "InterpreterImage.h"
 
 namespace hybridclr
 {
@@ -720,6 +721,16 @@ namespace metadata
 			inst->type_argv[i] = TryInflateIfNeed(inst->type_argv[i], genericContext, true);
 		}
 		return inst;
+	}
+
+	bool IsDifferentialHybridImage(const InterpreterImage* image)
+	{
+		return image && image->GetIl2CppImage()->assembly->originAssembly;
+	}
+
+	bool IsDifferentialHybridImage(const Il2CppImage* image)
+	{
+		return image && image->assembly->originAssembly;
 	}
 }
 }

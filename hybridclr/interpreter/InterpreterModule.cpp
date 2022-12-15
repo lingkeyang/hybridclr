@@ -14,6 +14,7 @@
 #include "../metadata/MetadataModule.h"
 #include "../metadata/MetadataUtil.h"
 #include "../metadata/InterpreterImage.h"
+#include "../metadata/DifferentialHybridImage.h"
 #include "../transform/Transform.h"
 
 #include "MethodBridge.h"
@@ -140,23 +141,67 @@ namespace hybridclr
 
 		Il2CppMethodPointer InterpreterModule::GetMethodPointer(const Il2CppMethodDefinition* method)
 		{
+#if HYBRIDCLR_ENABLE_DHE
+			metadata::InterpreterImage* image = metadata::MetadataModule::GetImage(method);
+			if (hybridclr::metadata::IsDifferentialHybridImage(image))
+			{
+				Il2CppMethodPointer methodPointer = ((metadata::DifferentialHybridImage*)image)->TryGetMethodPointer(method);
+				if (methodPointer)
+				{
+					return methodPointer;
+				}
+			}
+#endif
 			Il2CppMethodPointer ncm = GetNative2ManagedMethod(method, false);
 			return ncm ? ncm : (Il2CppMethodPointer)NotSupportNative2Managed;
 		}
 
 		Il2CppMethodPointer InterpreterModule::GetMethodPointer(const MethodInfo* method)
 		{
+#if HYBRIDCLR_ENABLE_DHE
+			metadata::InterpreterImage* image = metadata::MetadataModule::GetImage(method);
+			if (hybridclr::metadata::IsDifferentialHybridImage(image))
+			{
+				Il2CppMethodPointer methodPointer = ((metadata::DifferentialHybridImage*)image)->TryGetMethodPointer(method);
+				if (methodPointer)
+				{
+					return methodPointer;
+				}
+			}
+#endif
 			Il2CppMethodPointer ncm = GetNative2ManagedMethod(method, false);
 			return ncm ? ncm : (Il2CppMethodPointer)NotSupportNative2Managed;
 		}
 
 		Il2CppMethodPointer InterpreterModule::GetAdjustThunkMethodPointer(const Il2CppMethodDefinition* method)
 		{
+#if HYBRIDCLR_ENABLE_DHE
+			metadata::InterpreterImage* image = metadata::MetadataModule::GetImage(method);
+			if (hybridclr::metadata::IsDifferentialHybridImage(image))
+			{
+				Il2CppMethodPointer methodPointer = ((metadata::DifferentialHybridImage*)image)->TryGetAdjustThunkMethodPointer(method);
+				if (methodPointer)
+				{
+					return methodPointer;
+				}
+			}
+#endif
 			return GetNativeAdjustMethodMethod(method, false);
 		}
 
 		Il2CppMethodPointer InterpreterModule::GetAdjustThunkMethodPointer(const MethodInfo* method)
 		{
+#if HYBRIDCLR_ENABLE_DHE
+			metadata::InterpreterImage* image = metadata::MetadataModule::GetImage(method);
+			if (hybridclr::metadata::IsDifferentialHybridImage(image))
+			{
+				Il2CppMethodPointer methodPointer = ((metadata::DifferentialHybridImage*)image)->TryGetAdjustThunkMethodPointer(method);
+				if (methodPointer)
+				{
+					return methodPointer;
+				}
+			}
+#endif
 			return GetNativeAdjustMethodMethod(method, false);
 		}
 
@@ -465,6 +510,17 @@ namespace hybridclr
 
 	InvokerMethod InterpreterModule::GetMethodInvoker(const Il2CppMethodDefinition* method)
 	{
+#if HYBRIDCLR_ENABLE_DHE
+		metadata::InterpreterImage* image = metadata::MetadataModule::GetImage(method);
+		if (hybridclr::metadata::IsDifferentialHybridImage(image))
+		{
+			InvokerMethod methodInvoker = ((metadata::DifferentialHybridImage*)image)->TryGetMethodInvoker(method);
+			if (methodInvoker)
+			{
+				return methodInvoker;
+			}
+		}
+#endif
 		Il2CppClass* klass = il2cpp::vm::GlobalMetadata::GetTypeInfoFromTypeDefinitionIndex(method->declaringType);
 		const char* methodName = il2cpp::vm::GlobalMetadata::GetStringFromIndex(method->nameIndex);
 		// special for Delegate::DynamicInvoke
@@ -473,6 +529,17 @@ namespace hybridclr
 
 	InvokerMethod InterpreterModule::GetMethodInvoker(const MethodInfo* method)
 	{
+#if HYBRIDCLR_ENABLE_DHE
+		metadata::InterpreterImage* image = metadata::MetadataModule::GetImage(method);
+		if (hybridclr::metadata::IsDifferentialHybridImage(image))
+		{
+			InvokerMethod methodInvoker = ((metadata::DifferentialHybridImage*)image)->TryGetMethodInvoker(method);
+			if (methodInvoker)
+			{
+				return methodInvoker;
+			}
+		}
+#endif
 		Il2CppClass* klass = method->klass;
 		return !klass || !metadata::IsChildTypeOfMulticastDelegate(klass) || strcmp(method->name, "Invoke") ? InterpterInvoke : InterpreterDelegateInvoke;
 	}

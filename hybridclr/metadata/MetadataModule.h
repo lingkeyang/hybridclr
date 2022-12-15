@@ -268,7 +268,6 @@ namespace metadata
 			return it != s_methodPointer2ReverseInfos.end() ? it->second->index : -1;
 		}
 
-		static LoadImageErrorCode LoadMetadataForAOTAssembly(const void* dllBytes, uint32_t dllSize, HomologousImageMode mode);
 	private:
 		static void InitReversePInvokeInfo();
 
