@@ -2,8 +2,9 @@
 #include <tuple>
 
 #include "vm/GlobalMetadata.h"
-#include "vm/MetadataAlloc.h"
 #include "vm/Exception.h"
+#include "vm/MetadataLock.h"
+#include "vm/MetadataAlloc.h"
 #include "utils/HashUtils.h"
 #include "metadata/Il2CppTypeHash.h"
 #include "metadata/Il2CppTypeCompare.h"
