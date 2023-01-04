@@ -462,7 +462,7 @@ namespace metadata
 					const Il2CppMethodDefinition* originMethod = FindMatchMethod(tm.aotType, methodDef);
 					if (originMethod)
 					{
-						if (_notChangeMethodTokens.find(methodDef->token) != _notChangeMethodTokens.end())
+						if (_changeMethodTokens.find(methodDef->token) == _changeMethodTokens.end())
 						{
 							mm.aotMethod = originMethod;
 							mm.aotMethodPointer = il2cpp::vm::MetadataCache::GetMethodPointer(_originImage, originMethod->token);

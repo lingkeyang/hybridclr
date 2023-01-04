@@ -14,7 +14,9 @@ namespace metadata
 
 	struct DifferentialHybridOption
 	{
-		std::vector<uint32_t> notChangeMethodTokens;
+		std::vector<uint32_t> changeMethodTokens;
+
+		std::vector<uint32_t> unchangedClassTokens;
 
 		bool TryUnmarshal(BlobReader& reader, std::vector<uint32_t>& arr)
 		{
@@ -43,7 +45,12 @@ namespace metadata
 				return false;
 			}
 
-			if (!TryUnmarshal(reader, notChangeMethodTokens))
+			if (!TryUnmarshal(reader, changeMethodTokens))
+			{
+				return false;
+			}
+
+			if (!TryUnmarshal(reader, unchangedClassTokens))
 			{
 				return false;
 			}
@@ -83,7 +90,8 @@ namespace metadata
 
 	public:
 		DifferentialHybridImage(uint32_t imageIndex, const DifferentialHybridOption& options) : InterpreterImage(imageIndex),
-			_notChangeMethodTokens(options.notChangeMethodTokens.begin(), options.notChangeMethodTokens.end())
+			_changeMethodTokens(options.changeMethodTokens.begin(), options.changeMethodTokens.end()),
+			_unchangedClassTokens(options.unchangedClassTokens.begin(), options.unchangedClassTokens.end())
 		{
 		}
 
@@ -156,7 +164,8 @@ namespace metadata
 
 		const Il2CppAssembly* _originAssembly;
 		const Il2CppImage* _originImage;
-		std::unordered_set<uint32_t> _notChangeMethodTokens;
+		std::unordered_set<uint32_t> _changeMethodTokens;
+		std::unordered_set<uint32_t> _unchangedClassTokens;
 		std::unordered_map<uint32_t, const Il2CppMethodDefinition*> _originMethodToken2InterpreterMethodDefs;
 		std::vector<TypeMapping> _typeMappings;
 		std::unordered_map<const Il2CppTypeDefinition*, const Il2CppTypeDefinition*> _originType2InterpreterTypes;
