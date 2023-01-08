@@ -87,6 +87,8 @@ namespace metadata
 		//static const Il2CppGenericInst* TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi);
 		static const Il2CppMethodDefinition* TranslateMethodDefinitionToDHE(const Il2CppMethodDefinition* methodDef);
 		static const Il2CppGenericMethod* TranslateGenericMethodToDHE(const Il2CppGenericMethod* methodDef);
+		static const Il2CppType* TranslateReverseGenericShareIl2CppTypeFromDHE(const Il2CppType* type);
+		static const Il2CppGenericInst* TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi);
 
 	public:
 		DifferentialHybridImage(uint32_t imageIndex, const DifferentialHybridOption& options) : InterpreterImage(imageIndex),
@@ -108,13 +110,13 @@ namespace metadata
 			return _typeMappings[index].aotType;
 		}
 
-		//const Il2CppTypeDefinition* GetGenericShareOriginType(const Il2CppTypeDefinition* type)
-		//{
-		//	uint32_t index = GetTypeRawIndex(type);
-		//	IL2CPP_ASSERT(index < (uint32_t)_typeMappings.size());
-		//	TypeMapping& tm = _typeMappings[index];
-		//	return tm.notChanged ? tm.aotType : nullptr;
-		//}
+		const Il2CppTypeDefinition* GetGenericShareOriginType(const Il2CppTypeDefinition* type)
+		{
+			uint32_t index = GetTypeRawIndex(type);
+			IL2CPP_ASSERT(index < (uint32_t)_typeMappings.size());
+			TypeMapping& tm = _typeMappings[index];
+			return tm.notChanged ? tm.aotType : nullptr;
+		}
 
 		const Il2CppTypeDefinition* GetInterpreterTypeByOriginType(const Il2CppTypeDefinition* type)
 		{

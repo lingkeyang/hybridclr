@@ -200,6 +200,117 @@ namespace metadata
 		return dhGenericMethod;
 	}
 
+	const Il2CppType* DifferentialHybridImage::TranslateReverseGenericShareIl2CppTypeFromDHE(const Il2CppType* type)
+	{
+		switch (type->type)
+		{
+		case IL2CPP_TYPE_OBJECT:
+		case IL2CPP_TYPE_VOID:
+		case IL2CPP_TYPE_BOOLEAN:
+		case IL2CPP_TYPE_CHAR:
+		case IL2CPP_TYPE_I1:
+		case IL2CPP_TYPE_U1:
+		case IL2CPP_TYPE_I2:
+		case IL2CPP_TYPE_U2:
+		case IL2CPP_TYPE_I4:
+		case IL2CPP_TYPE_U4:
+		case IL2CPP_TYPE_I:
+		case IL2CPP_TYPE_U:
+		case IL2CPP_TYPE_I8:
+		case IL2CPP_TYPE_U8:
+		case IL2CPP_TYPE_R4:
+		case IL2CPP_TYPE_R8:
+		case IL2CPP_TYPE_STRING:
+		case IL2CPP_TYPE_TYPEDBYREF:
+		case IL2CPP_TYPE_ARRAY:
+			return type;
+		case IL2CPP_TYPE_FNPTR:
+			IL2CPP_NOT_IMPLEMENTED(Class::FromIl2CppType);
+			return NULL; //mono_fnptr_class_get (type->data.method);
+		case IL2CPP_TYPE_PTR:
+		case IL2CPP_TYPE_SZARRAY:
+		case IL2CPP_TYPE_CLASS:
+			return type;
+		case IL2CPP_TYPE_VALUETYPE:
+		{
+			Il2CppTypeDefinition* typeDef = (Il2CppTypeDefinition*)type->data.typeHandle;
+			if (!hybridclr::metadata::IsInterpreterType(typeDef))
+			{
+				return type;
+			}
+			InterpreterImage* image = MetadataModule::GetImage(typeDef);
+			if (!IsDifferentialHybridImage(image))
+			{
+				return type;
+			}
+			DifferentialHybridImage* dhImage = (DifferentialHybridImage*)image;
+			const Il2CppTypeDefinition* aotTypeDef = dhImage->GetGenericShareOriginType(typeDef);
+			if (!aotTypeDef)
+			{
+				return type;
+			}
+			return il2cpp::vm::GlobalMetadata::GetIl2CppTypeFromIndex(aotTypeDef->byvalTypeIndex);
+		}
+		case IL2CPP_TYPE_GENERICINST:
+		{
+			Il2CppGenericClass* gc = type->data.generic_class;
+			if (!IsValueType((Il2CppTypeDefinition*)gc->type->data.typeHandle))
+			{
+				return type;
+			}
+			const Il2CppType* dhType = TranslateReverseGenericShareIl2CppTypeFromDHE(gc->type);
+			const Il2CppGenericInst* klassGi = TranslateReverseGenericShareGenericInstFromDHE(gc->context.class_inst);
+			const Il2CppGenericInst* methodGi = TranslateReverseGenericShareGenericInstFromDHE(gc->context.method_inst);
+			if (dhType == gc->type && klassGi == gc->context.class_inst && methodGi == gc->context.method_inst)
+			{
+				return type;
+			}
+			Il2CppGenericClass* dhGc = MallocMetadataWithLock<Il2CppGenericClass>();
+			dhGc->type = dhType;
+			dhGc->context = { klassGi, methodGi };
+			dhGc->cached_class = nullptr;
+			Il2CppType* newType = MallocMetadataWithLock<Il2CppType>();
+			*newType = *type;
+			newType->data.generic_class = dhGc;
+			return newType;
+		}
+		case IL2CPP_TYPE_VAR:
+		case IL2CPP_TYPE_MVAR:
+			il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetExecutionEngineException("TranslateIl2CppTypeFromAOTToDHE not support generic var"));
+		default:
+			IL2CPP_NOT_IMPLEMENTED(Class::FromIl2CppType);
+		}
+		return nullptr;
+	}
+
+	const Il2CppGenericInst* DifferentialHybridImage::TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi)
+	{
+		if (!gi)
+		{
+			return gi;
+		}
+		const Il2CppType* tempTypeArgv[32];
+		IL2CPP_ASSERT(gi->type_argc <= 32);
+		bool change = false;
+		for (uint32_t i = 0; i < gi->type_argc; i++)
+		{
+			const Il2CppType* argType = gi->type_argv[i];
+			const Il2CppType* dhArgType = TranslateReverseGenericShareIl2CppTypeFromDHE(argType);
+			change = change || (argType != dhArgType);
+			tempTypeArgv[i] = dhArgType;
+		}
+		if (!change)
+		{
+			return gi;
+		}
+		Il2CppGenericInst* dhGi = MallocMetadataWithLock<Il2CppGenericInst>();
+		Il2CppType** newArgTypes = CallocMetadataWithLock<Il2CppType*>(gi->type_argc);
+		std::memcpy(newArgTypes, tempTypeArgv, sizeof(Il2CppType*) * gi->type_argc);
+		dhGi->type_argc = gi->type_argc;
+		dhGi->type_argv = (const Il2CppType**)newArgTypes;
+		return dhGi;
+	}
+
 	void DifferentialHybridImage::BuildIl2CppImage(Il2CppImage* image, Il2CppAssembly* originAssembly)
 	{
 		InterpreterImage::BuildIl2CppImage(image);
@@ -263,6 +374,7 @@ namespace metadata
 			{
 				_originType2InterpreterTypes[type.aotType] = type.interpType;
 				_interpreterToken2OriginAOTTokens[type.interpType->token] = type.aotType->token;
+				type.notChanged = _unchangedClassTokens.find(type.interpType->token) != _unchangedClassTokens.end();
 			}
 		}
 	}
@@ -533,11 +645,11 @@ namespace metadata
 		}
 		const MethodInfo* aotMethod = il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodHandle((Il2CppMetadataMethodDefinitionHandle)mm.aotMethod);
 		const Il2CppGenericContext& originCtx = method->genericMethod->context;
-		//Il2CppGenericContext reverseCtx = { MetadataModule::TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), MetadataModule::TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
+		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
 #if HYBRIDCLR_UNITY_2021_OR_NEW
-		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &originCtx).methodPointer;
+		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &reverseCtx).methodPointer;
 #else
-		return il2cpp::vm::MetadataCache::GetMethodPointer(aotMethod, &originCtx, false, true);
+		return il2cpp::vm::MetadataCache::GetMethodPointer(aotMethod, &reverseCtx, false, true);
 #endif
 	}
 
@@ -561,11 +673,11 @@ namespace metadata
 		}
 		const MethodInfo* aotMethod = il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodHandle((Il2CppMetadataMethodDefinitionHandle)mm.aotMethod);
 		const Il2CppGenericContext& originCtx = method->genericMethod->context;
-		//Il2CppGenericContext reverseCtx = { MetadataModule::TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), MetadataModule::TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
+		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
 #if HYBRIDCLR_UNITY_2021_OR_NEW
-		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &originCtx).virtualMethodPointer;
+		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &reverseCtx).virtualMethodPointer;
 #else
-		return il2cpp::vm::MetadataCache::GetMethodPointer(aotMethod, &originCtx, true, false);
+		return il2cpp::vm::MetadataCache::GetMethodPointer(aotMethod, &reverseCtx, true, false);
 #endif
 	}
 
@@ -589,11 +701,11 @@ namespace metadata
 		}
 		const MethodInfo* aotMethod = il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodHandle((Il2CppMetadataMethodDefinitionHandle)mm.aotMethod);
 		const Il2CppGenericContext& originCtx = method->genericMethod->context;
-		//Il2CppGenericContext reverseCtx = { MetadataModule::TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), MetadataModule::TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
+		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
 #if HYBRIDCLR_UNITY_2021_OR_NEW
-		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &originCtx).invoker_method;
+		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &reverseCtx).invoker_method;
 #else
-		return il2cpp::vm::MetadataCache::GetInvokerMethodPointer(aotMethod, &originCtx);
+		return il2cpp::vm::MetadataCache::GetInvokerMethodPointer(aotMethod, &reverseCtx);
 #endif
 	}
 }
