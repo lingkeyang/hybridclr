@@ -3,6 +3,7 @@
 #include <unordered_map>
 
 #include "InterpreterImage.h"
+#include "ScopedMetadataPool.h"
 
 #if HYBRIDCLR_ENABLE_DHE
 
@@ -81,14 +82,12 @@ namespace metadata
 	class DifferentialHybridImage : public InterpreterImage
 	{
 	public:
-		static const Il2CppType* TranslateIl2CppTypeToDHE(const Il2CppType* type);
-		//static const Il2CppType* TranslateReverseGenericShareIl2CppTypeFromDHE(const Il2CppType* type);
-		static const Il2CppGenericInst* TranslateGenericInstToDHE(const Il2CppGenericInst* gi);
-		//static const Il2CppGenericInst* TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi);
-		static const Il2CppMethodDefinition* TranslateMethodDefinitionToDHE(const Il2CppMethodDefinition* methodDef);
-		static const Il2CppGenericMethod* TranslateGenericMethodToDHE(const Il2CppGenericMethod* methodDef);
-		static const Il2CppType* TranslateReverseGenericShareIl2CppTypeFromDHE(const Il2CppType* type);
-		static const Il2CppGenericInst* TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi);
+		static const Il2CppType* TranslateIl2CppTypeToDHE(const Il2CppType* type, ScopedMetadataPool* pool = nullptr);
+		static const Il2CppGenericInst* TranslateGenericInstToDHE(const Il2CppGenericInst* gi, ScopedMetadataPool* pool = nullptr);
+		static const Il2CppMethodDefinition* TranslateMethodDefinitionToDHE(const Il2CppMethodDefinition* methodDef, ScopedMetadataPool* pool = nullptr);
+		static const Il2CppGenericMethod* TranslateGenericMethodToDHE(const Il2CppGenericMethod* methodDef, ScopedMetadataPool* pool = nullptr);
+		static const Il2CppType* TranslateReverseGenericShareIl2CppTypeFromDHE(const Il2CppType* type, ScopedMetadataPool* pool = nullptr);
+		static const Il2CppGenericInst* TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi, ScopedMetadataPool* pool = nullptr);
 
 	public:
 		DifferentialHybridImage(uint32_t imageIndex, const DifferentialHybridOption& options) : InterpreterImage(imageIndex),

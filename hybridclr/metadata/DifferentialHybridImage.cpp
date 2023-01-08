@@ -13,7 +13,19 @@ namespace hybridclr
 namespace metadata
 {
 
-	const Il2CppGenericInst* DifferentialHybridImage::TranslateGenericInstToDHE(const Il2CppGenericInst* gi)
+	template<typename T>
+	T* MallocMetadataWithPool(ScopedMetadataPool* pool)
+	{
+		return pool ? pool->Alloc<T>() : MallocMetadataWithLock<T>();
+	}
+
+	template<typename T>
+	T* CallocMetadataWithPool(ScopedMetadataPool* pool, uint32_t count)
+	{
+		return pool ? pool->CallocZero<T>(count) : CallocMetadataWithLock<T>(count);
+	}
+
+	const Il2CppGenericInst* DifferentialHybridImage::TranslateGenericInstToDHE(const Il2CppGenericInst* gi, ScopedMetadataPool* pool)
 	{
 		if (!gi)
 		{
@@ -25,7 +37,7 @@ namespace metadata
 		for (uint32_t i = 0; i < gi->type_argc; i++)
 		{
 			const Il2CppType* argType = gi->type_argv[i];
-			const Il2CppType* dhArgType = TranslateIl2CppTypeToDHE(argType);
+			const Il2CppType* dhArgType = TranslateIl2CppTypeToDHE(argType, pool);
 			change = change || (argType != dhArgType);
 			tempTypeArgv[i] = dhArgType;
 		}
@@ -33,15 +45,15 @@ namespace metadata
 		{
 			return gi;
 		}
-		Il2CppGenericInst* dhGi = MallocMetadataWithLock<Il2CppGenericInst>();
-		Il2CppType** newArgTypes = CallocMetadataWithLock<Il2CppType*>(gi->type_argc);
+		Il2CppGenericInst* dhGi = MallocMetadataWithPool<Il2CppGenericInst>(pool);
+		Il2CppType** newArgTypes = CallocMetadataWithPool<Il2CppType*>(pool, gi->type_argc);
 		std::memcpy(newArgTypes, tempTypeArgv, sizeof(Il2CppType*) * gi->type_argc);
 		dhGi->type_argc = gi->type_argc;
 		dhGi->type_argv = (const Il2CppType**)newArgTypes;
 		return dhGi;
 	}
 
-	const Il2CppType* DifferentialHybridImage::TranslateIl2CppTypeToDHE(const Il2CppType* type)
+	const Il2CppType* DifferentialHybridImage::TranslateIl2CppTypeToDHE(const Il2CppType* type, ScopedMetadataPool* pool)
 	{
 		switch (type->type)
 		{
@@ -67,12 +79,12 @@ namespace metadata
 		case IL2CPP_TYPE_ARRAY:
 		{
 			const Il2CppType* eleType = type->data.array->etype;
-			const Il2CppType* dheEleType = TranslateIl2CppTypeToDHE(eleType);
+			const Il2CppType* dheEleType = TranslateIl2CppTypeToDHE(eleType, pool);
 			if (eleType == dheEleType)
 			{
 				return type;
 			}
-			Il2CppType* newType = MallocMetadataWithLock<Il2CppType>();
+			Il2CppType* newType = MallocMetadataWithPool<Il2CppType>(pool);
 			*newType = *type;
 			newType->data.array->etype = dheEleType;
 			return newType;
@@ -84,12 +96,12 @@ namespace metadata
 		case IL2CPP_TYPE_SZARRAY:
 		{
 			const Il2CppType* eleType = type->data.type;
-			const Il2CppType* dheEleType = TranslateIl2CppTypeToDHE(eleType);
+			const Il2CppType* dheEleType = TranslateIl2CppTypeToDHE(eleType, pool);
 			if (eleType == dheEleType)
 			{
 				return type;
 			}
-			Il2CppType* newType = MallocMetadataWithLock<Il2CppType>();
+			Il2CppType* newType = MallocMetadataWithPool<Il2CppType>(pool);
 			*newType = *type;
 			newType->data.type = dheEleType;
 			return newType;
@@ -114,7 +126,7 @@ namespace metadata
 			{
 				return type;
 			}
-			Il2CppType* newType = MallocMetadataWithLock<Il2CppType>();
+			Il2CppType* newType = MallocMetadataWithPool<Il2CppType>(pool);
 			*newType = *type;
 			newType->data.typeHandle = (Il2CppMetadataTypeHandle)dhTypeDef;
 			return newType;
@@ -122,18 +134,18 @@ namespace metadata
 		case IL2CPP_TYPE_GENERICINST:
 		{
 			Il2CppGenericClass* gc = type->data.generic_class;
-			const Il2CppType* dhType = TranslateIl2CppTypeToDHE(gc->type);
-			const Il2CppGenericInst* klassGi = TranslateGenericInstToDHE(gc->context.class_inst);
-			const Il2CppGenericInst* methodGi = TranslateGenericInstToDHE(gc->context.method_inst);
+			const Il2CppType* dhType = TranslateIl2CppTypeToDHE(gc->type, pool);
+			const Il2CppGenericInst* klassGi = TranslateGenericInstToDHE(gc->context.class_inst, pool);
+			const Il2CppGenericInst* methodGi = TranslateGenericInstToDHE(gc->context.method_inst, pool);
 			if (dhType == gc->type && klassGi == gc->context.class_inst && methodGi == gc->context.method_inst)
 			{
 				return type;
 			}
-			Il2CppGenericClass* dhGc = MallocMetadataWithLock<Il2CppGenericClass>();
+			Il2CppGenericClass* dhGc = MallocMetadataWithPool<Il2CppGenericClass>(pool);
 			dhGc->type = dhType;
 			dhGc->context = { klassGi, methodGi };
 			dhGc->cached_class = nullptr;
-			Il2CppType* newType = MallocMetadataWithLock<Il2CppType>();
+			Il2CppType* newType = MallocMetadataWithPool<Il2CppType>(pool);
 			*newType = *type;
 			newType->data.generic_class = dhGc;
 			return newType;
@@ -147,7 +159,7 @@ namespace metadata
 		return nullptr;
 	}
 
-	const Il2CppMethodDefinition* DifferentialHybridImage::TranslateMethodDefinitionToDHE(const Il2CppMethodDefinition* methodDef)
+	const Il2CppMethodDefinition* DifferentialHybridImage::TranslateMethodDefinitionToDHE(const Il2CppMethodDefinition* methodDef, ScopedMetadataPool* pool)
 	{
 		Il2CppTypeDefinition* typeDef = (Il2CppTypeDefinition*)il2cpp::vm::GlobalMetadata::GetTypeHandleFromIndex(methodDef->declaringType);
 
@@ -167,19 +179,18 @@ namespace metadata
 	}
 
 
-	const Il2CppGenericMethod* DifferentialHybridImage::TranslateGenericMethodToDHE(const Il2CppGenericMethod* genericMethod)
+	const Il2CppGenericMethod* DifferentialHybridImage::TranslateGenericMethodToDHE(const Il2CppGenericMethod* genericMethod, ScopedMetadataPool* pool)
 	{
-		// 由于genericmethod的初始化时机早，全部指向最早的image指针，没有指向被处理后的image->assembly->dhassembly->image
 		const Il2CppImage* image = genericMethod->methodDefinition->klass->image;
 
 		const Il2CppGenericContext& gc = genericMethod->context;
-		const Il2CppGenericInst* klassGi = TranslateGenericInstToDHE(gc.class_inst);
-		const Il2CppGenericInst* methodGi = TranslateGenericInstToDHE(gc.method_inst);
+		const Il2CppGenericInst* klassGi = TranslateGenericInstToDHE(gc.class_inst, pool);
+		const Il2CppGenericInst* methodGi = TranslateGenericInstToDHE(gc.method_inst, pool);
 		const MethodInfo* dhMethod = genericMethod->methodDefinition;
 
 		if (hybridclr::metadata::IsDifferentialHybridImage(image))
 		{
-			const Il2CppMethodDefinition* dhMethodDef = TranslateMethodDefinitionToDHE((Il2CppMethodDefinition*)dhMethod->methodMetadataHandle);
+			const Il2CppMethodDefinition* dhMethodDef = TranslateMethodDefinitionToDHE((Il2CppMethodDefinition*)dhMethod->methodMetadataHandle, pool);
 			if ((Il2CppMetadataMethodDefinitionHandle)dhMethodDef != dhMethod->methodMetadataHandle)
 			{
 				dhMethod = il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodHandle((Il2CppMetadataMethodDefinitionHandle)dhMethodDef);
@@ -200,7 +211,7 @@ namespace metadata
 		return dhGenericMethod;
 	}
 
-	const Il2CppType* DifferentialHybridImage::TranslateReverseGenericShareIl2CppTypeFromDHE(const Il2CppType* type)
+	const Il2CppType* DifferentialHybridImage::TranslateReverseGenericShareIl2CppTypeFromDHE(const Il2CppType* type, ScopedMetadataPool* pool)
 	{
 		switch (type->type)
 		{
@@ -258,18 +269,18 @@ namespace metadata
 			{
 				return type;
 			}
-			const Il2CppType* dhType = TranslateReverseGenericShareIl2CppTypeFromDHE(gc->type);
-			const Il2CppGenericInst* klassGi = TranslateReverseGenericShareGenericInstFromDHE(gc->context.class_inst);
-			const Il2CppGenericInst* methodGi = TranslateReverseGenericShareGenericInstFromDHE(gc->context.method_inst);
+			const Il2CppType* dhType = TranslateReverseGenericShareIl2CppTypeFromDHE(gc->type, pool);
+			const Il2CppGenericInst* klassGi = TranslateReverseGenericShareGenericInstFromDHE(gc->context.class_inst, pool);
+			const Il2CppGenericInst* methodGi = TranslateReverseGenericShareGenericInstFromDHE(gc->context.method_inst, pool);
 			if (dhType == gc->type && klassGi == gc->context.class_inst && methodGi == gc->context.method_inst)
 			{
 				return type;
 			}
-			Il2CppGenericClass* dhGc = MallocMetadataWithLock<Il2CppGenericClass>();
+			Il2CppGenericClass* dhGc = MallocMetadataWithPool<Il2CppGenericClass>(pool);
 			dhGc->type = dhType;
 			dhGc->context = { klassGi, methodGi };
 			dhGc->cached_class = nullptr;
-			Il2CppType* newType = MallocMetadataWithLock<Il2CppType>();
+			Il2CppType* newType = MallocMetadataWithPool<Il2CppType>(pool);
 			*newType = *type;
 			newType->data.generic_class = dhGc;
 			return newType;
@@ -283,7 +294,7 @@ namespace metadata
 		return nullptr;
 	}
 
-	const Il2CppGenericInst* DifferentialHybridImage::TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi)
+	const Il2CppGenericInst* DifferentialHybridImage::TranslateReverseGenericShareGenericInstFromDHE(const Il2CppGenericInst* gi, ScopedMetadataPool* pool)
 	{
 		if (!gi)
 		{
@@ -295,7 +306,7 @@ namespace metadata
 		for (uint32_t i = 0; i < gi->type_argc; i++)
 		{
 			const Il2CppType* argType = gi->type_argv[i];
-			const Il2CppType* dhArgType = TranslateReverseGenericShareIl2CppTypeFromDHE(argType);
+			const Il2CppType* dhArgType = TranslateReverseGenericShareIl2CppTypeFromDHE(argType, pool);
 			change = change || (argType != dhArgType);
 			tempTypeArgv[i] = dhArgType;
 		}
@@ -303,8 +314,8 @@ namespace metadata
 		{
 			return gi;
 		}
-		Il2CppGenericInst* dhGi = MallocMetadataWithLock<Il2CppGenericInst>();
-		Il2CppType** newArgTypes = CallocMetadataWithLock<Il2CppType*>(gi->type_argc);
+		Il2CppGenericInst* dhGi = MallocMetadataWithPool<Il2CppGenericInst>(pool);
+		Il2CppType** newArgTypes = CallocMetadataWithPool<Il2CppType*>(pool, gi->type_argc);
 		std::memcpy(newArgTypes, tempTypeArgv, sizeof(Il2CppType*) * gi->type_argc);
 		dhGi->type_argc = gi->type_argc;
 		dhGi->type_argv = (const Il2CppType**)newArgTypes;
@@ -630,6 +641,8 @@ namespace metadata
 		return _methodMappings[index].aotMethodPointer;
 	}
 
+	constexpr uint32_t DEFAULT_SCOPED_POOL_SIZE = 1024 * 10;
+
 	Il2CppMethodPointer DifferentialHybridImage::TryGetMethodPointer(const MethodInfo* method)
 	{
 		if (method->is_generic)
@@ -645,7 +658,9 @@ namespace metadata
 		}
 		const MethodInfo* aotMethod = il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodHandle((Il2CppMetadataMethodDefinitionHandle)mm.aotMethod);
 		const Il2CppGenericContext& originCtx = method->genericMethod->context;
-		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
+		char localPoolBytes[DEFAULT_SCOPED_POOL_SIZE];
+		ScopedMetadataPool pool(localPoolBytes, sizeof(localPoolBytes));
+		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst, &pool), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst, &pool) };
 #if HYBRIDCLR_UNITY_2021_OR_NEW
 		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &reverseCtx).methodPointer;
 #else
@@ -673,7 +688,9 @@ namespace metadata
 		}
 		const MethodInfo* aotMethod = il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodHandle((Il2CppMetadataMethodDefinitionHandle)mm.aotMethod);
 		const Il2CppGenericContext& originCtx = method->genericMethod->context;
-		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
+		char localPoolBytes[DEFAULT_SCOPED_POOL_SIZE];
+		ScopedMetadataPool pool(localPoolBytes, sizeof(localPoolBytes));
+		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst, &pool), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst, &pool) };
 #if HYBRIDCLR_UNITY_2021_OR_NEW
 		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &reverseCtx).virtualMethodPointer;
 #else
@@ -701,7 +718,9 @@ namespace metadata
 		}
 		const MethodInfo* aotMethod = il2cpp::vm::GlobalMetadata::GetMethodInfoFromMethodHandle((Il2CppMetadataMethodDefinitionHandle)mm.aotMethod);
 		const Il2CppGenericContext& originCtx = method->genericMethod->context;
-		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst) };
+		char localPoolBytes[DEFAULT_SCOPED_POOL_SIZE];
+		ScopedMetadataPool pool(localPoolBytes, sizeof(localPoolBytes));
+		Il2CppGenericContext reverseCtx = { TranslateReverseGenericShareGenericInstFromDHE(originCtx.class_inst, &pool), TranslateReverseGenericShareGenericInstFromDHE(originCtx.method_inst, &pool) };
 #if HYBRIDCLR_UNITY_2021_OR_NEW
 		return il2cpp::vm::MetadataCache::GetGenericMethodPointers(aotMethod, &reverseCtx).invoker_method;
 #else
