@@ -35,7 +35,7 @@ namespace metadata
 		template<typename T>
 		T* Calloc(uint32_t count)
 		{
-			return (T*)AllocBytes(sizeof(T) * count)
+			return (T*)AllocBytes(sizeof(T) * count);
 		}
 
 		template<typename T>
