@@ -779,7 +779,7 @@ else \
 				uint32_t methodDataIndex = GetOrAddResolveDataIndex(ptr2DataIdxs, resolveDatas, shareMethod);
 
 				bool isMultiDelegate = IsChildTypeOfMulticastDelegate(shareMethod->klass);
-				if (!isMultiDelegate && IsInterpreterMethod(shareMethod))
+				if (!isMultiDelegate && IsInterpreterMethod(shareMethod) && !IsDifferentialHybridImage(shareMethod->klass->image))
 				{
 					ctx.PopStackN(resolvedTotalArgNum);
 
