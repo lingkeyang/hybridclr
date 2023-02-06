@@ -152,7 +152,7 @@ namespace metadata
 		}
 		case IL2CPP_TYPE_VAR:
 		case IL2CPP_TYPE_MVAR:
-			il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetExecutionEngineException("TranslateIl2CppTypeFromAOTToDHE not support generic var"));
+			return type;
 		default:
 			IL2CPP_NOT_IMPLEMENTED(Class::FromIl2CppType);
 		}
@@ -287,7 +287,7 @@ namespace metadata
 		}
 		case IL2CPP_TYPE_VAR:
 		case IL2CPP_TYPE_MVAR:
-			il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetExecutionEngineException("TranslateIl2CppTypeFromAOTToDHE not support generic var"));
+			return type;
 		default:
 			IL2CPP_NOT_IMPLEMENTED(Class::FromIl2CppType);
 		}
