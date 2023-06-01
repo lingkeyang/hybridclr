@@ -664,7 +664,7 @@ namespace metadata
         IL2CPP_ASSERT(rmr.parent.parentType == TableType::TYPEDEF || rmr.parent.parentType == TableType::TYPEREF || rmr.parent.parentType == TableType::TYPESPEC);
         IL2CPP_ASSERT(rmr.signature.memberType == TableType::FIELD_POINTER);
         ret.containerType = rmr.parent.type;
-        ResolveField(&rmr.parent.type, rmr.name, &rmr.signature.field.type, ret.field);
+        ResolveFieldThrow(&rmr.parent.type, rmr.name, &rmr.signature.field.type, ret.field);
     }
 
     void Image::ReadLocalVarSig(BlobReader& reader, const Il2CppGenericContainer* klassGenericContainer, const Il2CppGenericContainer* methodGenericContainer, Il2CppType*& vars, uint32_t& varCount)
@@ -711,11 +711,11 @@ namespace metadata
         }
     }
 
-    static Il2CppClass* FindNetStandardExportedType(const char* namespaceStr, const char* nameStr)
+    Il2CppClass* Image::FindNetStandardExportedType(const char* namespaceStr, const char* nameStr)
     {
         for (const char** ptrAssName = s_netstandardRefs; *ptrAssName; ptrAssName++)
         {
-            const Il2CppAssembly* refAss = il2cpp::vm::Assembly::GetLoadedAssembly(*ptrAssName);
+            const Il2CppAssembly* refAss = GetLoadedAssembly(*ptrAssName);
             if (refAss)
             {
                 const Il2CppImage* image2 = il2cpp::vm::Assembly::GetImage(refAss);
@@ -735,7 +735,7 @@ namespace metadata
         const char* assName = _rawImage.GetStringFromRawIndex(data.name);
         const char* typeNameStr = _rawImage.GetStringFromRawIndex(typeName);
         const char* typeNamespaceStr = _rawImage.GetStringFromRawIndex(typeNamespace);
-        const Il2CppAssembly* refAss = il2cpp::vm::Assembly::GetLoadedAssembly(assName);
+        const Il2CppAssembly* refAss = GetLoadedAssembly(assName);
         Il2CppClass* klass = nullptr;
         if (refAss)
         {
@@ -919,7 +919,11 @@ namespace metadata
                 UserStringEncoding charEncoding = (UserStringEncoding)str[stringLength - 1];
                 clrStr = il2cpp::vm::String::NewUtf16((const Il2CppChar*)str, (stringLength - 1) / 2);
             }
+#if HYBRIDCLR_UNITY_2022_OR_NEW
+            _il2cppStringCache.GetOrAdd(index, clrStr);
+#else
             _il2cppStringCache.Add(index, clrStr);
+#endif
             return clrStr;
         }
     }
@@ -1018,7 +1022,7 @@ namespace metadata
         if (rmr.signature.memberType == TableType::FIELD_POINTER)
         {
             const Il2CppFieldDefinition* fieldDef = nullptr;
-            ResolveField(&rmr.parent.type, rmr.name, &rmr.signature.field.type, fieldDef);
+            ResolveFieldThrow(&rmr.parent.type, rmr.name, &rmr.signature.field.type, fieldDef);
             const FieldInfo* fieldInfo = GetFieldInfoFromFieldRef(rmr.parent.type, fieldDef);
             return fieldInfo;
         }

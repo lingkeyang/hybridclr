@@ -19,6 +19,7 @@
 #include "metadata/FieldLayout.h"
 #include "metadata/Il2CppTypeCompare.h"
 #include "metadata/GenericMetadata.h"
+#include "metadata/CustomAttributeCreator.h"
 #include "os/Atomic.h"
 #include "icalls/mscorlib/System/MonoCustomAttrs.h"
 
@@ -88,12 +89,6 @@ namespace metadata
 		image2->exportedTypeCount = _rawImage.GetTableRowNum(TableType::EXPORTEDTYPE);
 		image2->customAttributeCount = _rawImage.GetTableRowNum(TableType::CUSTOMATTRIBUTE);
 
-#if HYBRIDCLR_UNITY_2019
-		image2->typeStart = EncodeWithIndex(0);
-		image2->customAttributeStart = EncodeWithIndex(0);
-		image2->entryPointIndex = EncodeWithIndexExcept0(_rawImage.GetEntryPointToken());
-		image2->exportedTypeStart = EncodeWithIndex(0);
-#else
 		Il2CppImageGlobalMetadata* metadataImage = (Il2CppImageGlobalMetadata*)IL2CPP_MALLOC_ZERO(sizeof(Il2CppImageGlobalMetadata));
 		metadataImage->typeStart = EncodeWithIndex(0);
 		metadataImage->customAttributeStart = EncodeWithIndex(0);
@@ -101,7 +96,6 @@ namespace metadata
 		metadataImage->exportedTypeStart = EncodeWithIndex(0);
 		metadataImage->image = image2;
 		image2->metadataHandle = reinterpret_cast<Il2CppMetadataImageHandle>(metadataImage);
-#endif
 
 		image2->nameToClassHashTable = nullptr;
 		image2->codeGenModule = nullptr;
@@ -140,6 +134,8 @@ namespace metadata
 		InitInterfaces();
 		InitClass();
 		InitVTables();
+
+		BuildCustomAttributeDataReaders();
 	}
 
 	void InterpreterImage::InitTypeDefs_0()
@@ -172,11 +168,6 @@ namespace metadata
 			SET_IL2CPPTYPE_VALUE_TYPE(cppType, isValueType);
 			cppType.data.typeHandle = (Il2CppMetadataTypeHandle)&cur;
 			cur.byvalTypeIndex = AddIl2CppTypeCache(cppType);
-#if HYBRIDCLR_UNITY_2019
-			Il2CppType byRefType = cppType;
-			byRefType.byref = 1;
-			cur.byrefTypeIndex = AddIl2CppTypeCache(byRefType);
-#endif
 
 			if (IsInterface(cur.flags))
 			{
@@ -383,7 +374,7 @@ namespace metadata
 			uint32_t dataImageOffset = (uint32_t)-1;
 			bool ret = _rawImage.TranslateRVAToImageOffset(data.rva, dataImageOffset);
 			IL2CPP_ASSERT(ret);
-			fdv.dataIndex = (DefaultValueDataIndex)EncodeWithIndex(dataImageOffset);
+			fdv.dataIndex = (DefaultValueDataIndex)EncodeWithIndex(EncodeWithBlobSource(dataImageOffset, BlobSource::RAW_IMAGE));
 			_fieldDefaultValues.push_back(fdv);
 		}
 	}
@@ -476,6 +467,71 @@ namespace metadata
 		}
 	}
 
+	DefaultValueDataIndex InterpreterImage::ConvertConstValue(CustomAttributeDataWriter& writer, uint32_t blobIndex, const Il2CppType* type)
+	{
+		Il2CppTypeEnum ttype = type->type;
+		if (ttype == IL2CPP_TYPE_CLASS)
+		{
+			return kDefaultValueIndexNull;
+		}
+
+		DefaultValueIndex retIndex = EncodeWithIndex(EncodeWithBlobSource((DefaultValueIndex)writer.Size(), BlobSource::CONVERTED_IL2CPP_FORMAT));
+
+		BlobReader reader = _rawImage.GetBlobReaderByRawIndex(blobIndex);
+		switch (type->type)
+		{
+		case IL2CPP_TYPE_BOOLEAN:
+		case IL2CPP_TYPE_I1:
+		case IL2CPP_TYPE_U1:
+		{
+			writer.Write(reader, 1);
+			break;
+		}
+		case IL2CPP_TYPE_CHAR:
+		case IL2CPP_TYPE_I2:
+		case IL2CPP_TYPE_U2:
+		{
+			writer.Write(reader, 2);
+			break;
+		}
+		case IL2CPP_TYPE_I4:
+		{
+			writer.WriteCompressedInt32((int32_t)reader.Read32());
+			break;
+		}
+		case IL2CPP_TYPE_U4:
+		{
+			writer.WriteCompressedUint32(reader.Read32());
+			break;
+		}
+		case IL2CPP_TYPE_R4:
+		{
+			writer.Write(reader, 4);
+			break;
+		}
+		case IL2CPP_TYPE_I8:
+		case IL2CPP_TYPE_U8:
+		case IL2CPP_TYPE_R8:
+		{
+			writer.Write(reader, 8);
+			break;
+		}
+		case IL2CPP_TYPE_STRING:
+		{
+			std::string str = il2cpp::utils::StringUtils::Utf16ToUtf8((const Il2CppChar*)reader.GetData(), reader.GetLength() / 2);
+			writer.WriteCompressedInt32(str.length());
+			writer.WriteBytes((const uint8_t*)str.c_str(), str.length());
+			break;
+		}
+		default:
+		{
+			RaiseExecutionEngineException("not supported const type");
+		}
+		}
+		
+		return retIndex;
+	}
+
 	void InterpreterImage::InitConsts()
 	{
 		const Table& tb = _rawImage.GetTable(TableType::CONSTANT);
@@ -488,7 +544,6 @@ namespace metadata
 			Il2CppType type = {};
 			type.type = (Il2CppTypeEnum)data.type;
 			TypeIndex dataTypeIndex = AddIl2CppTypeCache(type);
-			bool isNullValue = type.type == IL2CPP_TYPE_CLASS;
 			switch (parentType)
 			{
 			case TableType::FIELD:
@@ -499,8 +554,7 @@ namespace metadata
 				Il2CppFieldDefaultValue fdv = {};
 				fdv.fieldIndex = rowIndex - 1;
 				fdv.typeIndex = dataTypeIndex;
-				uint32_t dataImageOffset = _rawImage.GetImageOffsetOfBlob(type.type, data.value);
-				fdv.dataIndex = isNullValue ? kDefaultValueIndexNull : (DefaultValueDataIndex)EncodeWithIndex(dataImageOffset);
+				fdv.dataIndex = ConvertConstValue(_constValues, data.value, &type);
 				_fieldDefaultValues.push_back(fdv);
 				break;
 			}
@@ -513,8 +567,7 @@ namespace metadata
 				Il2CppParameterDefaultValue pdv = {};
 				pdv.typeIndex = dataTypeIndex;
 				pdv.parameterIndex = fd.parameterIndex;
-				uint32_t dataImageOffset = _rawImage.GetImageOffsetOfBlob(type.type, data.value);
-				pdv.dataIndex = isNullValue ? kDefaultValueIndexNull : (DefaultValueDataIndex)EncodeWithIndex(dataImageOffset);
+				pdv.dataIndex = ConvertConstValue(_constValues, data.value, &type);
 				_paramDefaultValues.push_back(pdv);
 				break;
 			}
@@ -551,17 +604,10 @@ namespace metadata
 				IL2CPP_ASSERT(_tokenCustomAttributes.find(token) == _tokenCustomAttributes.end());
 				int32_t attributeStartIndex = EncodeWithIndex((int32_t)_customAttribues.size());
 				int32_t handleIndex = (int32_t)_customAttributeHandles.size();
-				_tokenCustomAttributes[token] = { (int32_t)EncodeWithIndex(handleIndex) };
-#ifdef HYBRIDCLR_UNITY_2021_OR_NEW
+				_tokenCustomAttributes[token] = { (int32_t)EncodeWithIndex(handleIndex), 0, 0 };
 				_customAttributeHandles.push_back({ token, (uint32_t)attributeStartIndex });
-#else
-				_customAttributeHandles.push_back({ token, attributeStartIndex, 0 });
-#endif
 				curTypeRange = &_customAttributeHandles[handleIndex];
 			}
-#ifndef HYBRIDCLR_UNITY_2021_OR_NEW
-			++curTypeRange->count;
-#endif
 
 			TableType ctorMethodTableType = DecodeCustomAttributeTypeCodedIndexTableType(data.type);
 			uint32_t ctorMethodRowIndex = DecodeCustomAttributeTypeCodedIndexRowIndex(data.type);
@@ -590,13 +636,387 @@ namespace metadata
 
 		}
 		IL2CPP_ASSERT(_tokenCustomAttributes.size() == _customAttributeHandles.size());
-#ifdef HYBRIDCLR_UNITY_2021_OR_NEW
 		// add extra Il2CppCustomAttributeTypeRange for compute count
 		_customAttributeHandles.push_back({ 0, EncodeWithIndex((int32_t)_customAttribues.size()) });
-#endif
+#if !HYBRIDCLR_UNITY_2022_OR_NEW
 		_customAttribtesCaches.resize(_tokenCustomAttributes.size());
+#endif
 	}
 
+	void InterpreterImage::BuildCustomAttributeDataReaders()
+	{
+		for (size_t i = 1 ; i < _customAttributeHandles.size() ; i++)
+		{
+			// ignore last one ofr comput count
+			const Il2CppCustomAttributeTypeRange& typeRange = _customAttributeHandles[i - 1];
+			uint32_t token = typeRange.token;
+			IL2CPP_ASSERT(_tokenCustomAttributes.find(token) != _tokenCustomAttributes.end());
+			CustomAtttributesInfo& cai = _tokenCustomAttributes[token];
+			BuildCustomAttributesData(cai, typeRange);
+		}
+	}
+
+	void InterpreterImage::BuildCustomAttributesData(CustomAtttributesInfo& cai, const Il2CppCustomAttributeTypeRange& curTypeRange)
+	{
+		cai.dataStartOffset = _il2cppFormatCustomDataBlob.Size();
+		const Il2CppCustomAttributeDataRange& nextTypeRange = *(&curTypeRange + 1);
+		uint32_t attrCount = nextTypeRange.startOffset - curTypeRange.startOffset;
+		IL2CPP_ASSERT(attrCount > 0 && attrCount < 1024);
+		_il2cppFormatCustomDataBlob.WriteAttributeCount(attrCount);
+		int32_t attrStartOffset = DecodeMetadataIndex(curTypeRange.startOffset);
+		int32_t methodIndexDataOffset = _il2cppFormatCustomDataBlob.Size();
+		_il2cppFormatCustomDataBlob.Skip(attrCount * sizeof(int32_t));
+		for (uint32_t i = 0; i < attrCount; i++)
+		{
+			const CustomAttribute& ca = _customAttribues[attrStartOffset + (int32_t)i];
+			MethodRefInfo mri = {};
+			ReadMethodRefInfoFromToken(nullptr, nullptr, DecodeTokenTableType(ca.ctorMethodToken), DecodeTokenRowIndex(ca.ctorMethodToken), mri);
+			const MethodInfo* ctorMethod = GetMethodInfoFromMethodDef(&mri.containerType, mri.methodDef);
+			MethodIndex ctorIndex = il2cpp::vm::GlobalMetadata::GetMethodIndexFromDefinition(mri.methodDef);
+			_il2cppFormatCustomDataBlob.WriteMethodIndex(methodIndexDataOffset, ctorIndex);
+			methodIndexDataOffset += sizeof(int32_t);
+			if (ca.value != 0)
+			{
+				BlobReader reader = _rawImage.GetBlobReaderByRawIndex(ca.value);
+				ConvertILCustomAttributeData2Il2CppFormat(ctorMethod, reader);
+			}
+			else
+			{
+				IL2CPP_ASSERT(mri.methodDef->parameterCount == 0);
+				_il2cppFormatCustomDataBlob.WriteCompressedUint32(0);
+				_il2cppFormatCustomDataBlob.WriteCompressedUint32(0);
+				_il2cppFormatCustomDataBlob.WriteCompressedUint32(0);
+			}
+		}
+		cai.dataEndOffset = _il2cppFormatCustomDataBlob.Size();
+	}
+
+	void InterpreterImage::WriteEncodeTypeEnum(CustomAttributeDataWriter& writer, const Il2CppType* type)
+	{
+		writer.WriteByte((uint8_t)type->type);
+		if (type->type == IL2CPP_TYPE_ENUM)
+		{
+			int32_t typeIndex = type->type == IL2CPP_TYPE_CLASS || type->type == IL2CPP_TYPE_VALUETYPE ? ((Il2CppTypeDefinition*)type->data.typeHandle)->byvalTypeIndex : AddIl2CppTypeCache(*type);
+			writer.WriteCompressedInt32(typeIndex);
+		}
+	}
+
+	void InterpreterImage::ConvertBoxedValue(CustomAttributeDataWriter& writer, BlobReader& reader, bool writeType)
+	{
+		if (writeType)
+		{
+			writer.WriteByte((byte)IL2CPP_TYPE_OBJECT);
+		}
+		uint64_t obj = 0;
+		Il2CppType kind = {};
+		ReadCustomAttributeFieldOrPropType(reader, kind);
+		ConvertFixedArg(writer, reader, &kind, true);
+	}
+
+	void InterpreterImage::ConvertSystemType(CustomAttributeDataWriter& writer, BlobReader& reader, bool writeType)
+	{
+		if (writeType)
+		{
+			writer.WriteByte((byte)IL2CPP_TYPE_IL2CPP_TYPE_INDEX);
+		}
+		Il2CppString* fullName = ReadSerString(reader);
+		if (!fullName)
+		{
+			writer.WriteCompressedInt32(-1);
+			return;
+		}
+		Il2CppReflectionType* type = GetReflectionTypeFromName(fullName);
+		if (!type)
+		{
+			std::string stdTypeName = il2cpp::utils::StringUtils::Utf16ToUtf8(fullName->chars);
+			TEMP_FORMAT(errMsg, "CustomAttribute fixed arg type:System.Type fullName:'%s' not find", stdTypeName.c_str());
+			il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetTypeLoadException(errMsg));
+		}
+		Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type->type);
+		if (!klass->generic_class)
+		{
+			writer.WriteCompressedInt32(((Il2CppTypeDefinition*)klass->typeMetadataHandle)->byvalTypeIndex);
+		}
+		else
+		{
+			writer.WriteCompressedInt32(AddIl2CppTypeCache(*(type->type)));
+		}
+	}
+
+	void InterpreterImage::ConvertFixedArg(CustomAttributeDataWriter& writer, BlobReader& reader, const Il2CppType* type, bool writeType)
+	{
+		if (writeType)
+		{
+			writer.WriteByte((uint8_t)type->type);
+		}
+		switch (type->type)
+		{
+		case IL2CPP_TYPE_BOOLEAN:
+		case IL2CPP_TYPE_I1:
+		case IL2CPP_TYPE_U1:
+		{
+			writer.Write(reader, 1);
+			break;
+		}
+		case IL2CPP_TYPE_CHAR:
+		case IL2CPP_TYPE_I2:
+		case IL2CPP_TYPE_U2:
+		{
+			writer.Write(reader, 2);
+			break;
+		}
+		case IL2CPP_TYPE_I4:
+		{
+			writer.WriteCompressedInt32((int32_t)reader.Read32());
+			break;
+		}
+		case IL2CPP_TYPE_U4:
+		{
+			writer.WriteCompressedUint32(reader.Read32());
+			break;
+		}
+		case IL2CPP_TYPE_R4:
+		{
+			writer.Write(reader, 4);
+			break;
+		}
+		case IL2CPP_TYPE_I8:
+		case IL2CPP_TYPE_U8:
+		case IL2CPP_TYPE_R8:
+		{
+			writer.Write(reader, 8);
+			break;
+		}
+		case IL2CPP_TYPE_SZARRAY:
+		{
+			int32_t numElem = (int32_t)reader.Read32();
+			writer.WriteCompressedInt32(numElem);
+			if (numElem != -1)
+			{
+				//Il2CppType kind = {};
+				//ReadCustomAttributeFieldOrPropType(reader, kind);
+				const Il2CppType* eleType = type->data.type;
+				WriteEncodeTypeEnum(writer, eleType);
+				if (eleType->type == IL2CPP_TYPE_OBJECT)
+				{
+					// kArrayTypeWithDifferentElements
+					writer.WriteByte(1);
+					for (uint16_t i = 0; i < numElem; i++)
+					{
+						ConvertBoxedValue(writer, reader, false);
+					}
+				}
+				else
+				{
+					// all element type is same.
+					writer.WriteByte(0);
+					for (uint16_t i = 0; i < numElem; i++)
+					{
+						ConvertFixedArg(writer, reader, eleType, false);
+					}
+				}
+
+			}
+			break;
+		}
+		case IL2CPP_TYPE_STRING:
+		{
+			byte b = reader.PeekByte();
+			if (b == 0xFF)
+			{
+				reader.SkipByte();
+				writer.WriteCompressedInt32(-1);
+			}
+			else if (b == 0)
+			{
+				reader.SkipByte();
+				writer.WriteCompressedInt32(0);
+			}
+			else
+			{
+				const byte* beginDataPtr = reader.GetDataOfReadPosition();
+				uint32_t len = reader.ReadCompressedUint32();
+				writer.WriteCompressedInt32((int32_t)len);
+				writer.WriteBytes(reader.GetDataOfReadPosition(), len);
+				reader.SkipBytes(len);
+			}
+			break;
+		}
+		case IL2CPP_TYPE_OBJECT:
+		{
+			if (writeType)
+			{
+				writer.PopByte();
+			}
+			ConvertBoxedValue(writer, reader, writeType);
+			//*(Il2CppObject**)data = ReadBoxedValue(reader);
+			// FIXME memory barrier
+			break;
+		}
+		case IL2CPP_TYPE_CLASS:
+		{
+			if (writeType)
+			{
+				writer.PopByte();
+			}
+			Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type);
+			if (!klass)
+			{
+				RaiseExecutionEngineException("type not find");
+			}
+			if (klass == il2cpp_defaults.object_class)
+			{
+				ConvertBoxedValue(writer, reader, writeType);
+			}
+			else if (klass == il2cpp_defaults.systemtype_class)
+			{
+				ConvertSystemType(writer, reader, true);
+			}
+			else
+			{
+				TEMP_FORMAT(errMsg, "fixed arg type:%s.%s not support", klass->namespaze, klass->name);
+				RaiseNotSupportedException(errMsg);
+			}
+			break;
+		}
+		case IL2CPP_TYPE_VALUETYPE:
+		{
+			IL2CPP_ASSERT(writeType);
+			writer.ReplaceLastByte((byte)IL2CPP_TYPE_ENUM);
+			Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type);
+			IL2CPP_ASSERT(klass->enumtype);
+			int32_t typeIndex = klass->generic_class ? AddIl2CppTypeCache(*type) : ((Il2CppTypeDefinition*)type->data.typeHandle)->byvalTypeIndex;
+			writer.WriteCompressedInt32(typeIndex);
+			ConvertFixedArg(writer, reader, &klass->element_class->byval_arg, false);
+			break;
+		}
+		case IL2CPP_TYPE_SYSTEM_TYPE:
+		{
+			if (writeType)
+			{
+				writer.PopByte();
+			}
+			ConvertSystemType(writer, reader, true);
+			break;
+		}
+		case IL2CPP_TYPE_BOXED_OBJECT:
+		{
+			uint8_t fieldOrPropType = reader.ReadByte();
+			IL2CPP_ASSERT(fieldOrPropType == 0x51);
+			ConvertBoxedValue(writer, reader, writeType);
+			break;
+		}
+		case IL2CPP_TYPE_ENUM:
+		{
+			Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type);
+			IL2CPP_ASSERT(klass->enumtype);
+			int32_t typeIndex = klass->generic_class ? AddIl2CppTypeCache(*type) : ((Il2CppTypeDefinition*)type->data.typeHandle)->byvalTypeIndex;
+			writer.WriteCompressedInt32(typeIndex);
+			ConvertFixedArg(writer, reader, &klass->element_class->byval_arg, false);
+			break;
+		}
+		default:
+		{
+			RaiseExecutionEngineException("not support fixed argument type");
+		}
+		}
+	}
+
+	void InterpreterImage::GetFieldDeclaringTypeIndexAndFieldIndexByName(const Il2CppTypeDefinition* declaringType, const char* name, int32_t& typeIndex, int32_t& fieldIndex)
+	{
+		Il2CppClass* klass = il2cpp::vm::GlobalMetadata::GetTypeInfoFromHandle((Il2CppMetadataTypeHandle)declaringType);
+		FieldInfo* field = il2cpp::vm::Class::GetFieldFromName(klass, name);
+		if (!field)
+		{
+			RaiseExecutionEngineException("GetFieldDeclaringTypeIndexAndFieldIndexByName can't find field");
+		}
+		typeIndex = (field->parent == klass) ? kTypeDefinitionIndexInvalid : AddIl2CppTypeCache(klass->byval_arg);
+		fieldIndex = (int32_t)(field - field->parent->fields);
+	}
+
+	void InterpreterImage::GetPropertyDeclaringTypeIndexAndPropertyIndexByName(const Il2CppTypeDefinition* declaringType, const char* name, int32_t& typeIndex, int32_t& fieldIndex)
+	{
+		Il2CppClass* klass = il2cpp::vm::GlobalMetadata::GetTypeInfoFromHandle((Il2CppMetadataTypeHandle)declaringType);
+		const PropertyInfo* propertyInfo = il2cpp::vm::Class::GetPropertyFromName(klass, name);
+		if (!propertyInfo)
+		{
+			RaiseExecutionEngineException("GetFieldDeclaringTypeIndexAndFieldIndexByName can't find field");
+		}
+		typeIndex = (propertyInfo->parent == klass) ? kTypeDefinitionIndexInvalid : AddIl2CppTypeCache(klass->byval_arg);
+		fieldIndex = (int32_t)(propertyInfo - propertyInfo->parent->properties);
+	}
+
+	void InterpreterImage::ConvertILCustomAttributeData2Il2CppFormat(const MethodInfo* ctorMethod, BlobReader& reader)
+	{
+		uint16_t prolog = reader.Read16();
+		IL2CPP_ASSERT(prolog == 0x0001);
+		IL2CPP_ASSERT(!ctorMethod->is_generic);
+
+		_tempCtorArgBlob.Reset();
+		for (uint16_t i = 0; i < ctorMethod->parameters_count; i++)
+		{
+			const Il2CppType* paramType = GET_METHOD_PARAMETER_TYPE(ctorMethod->parameters[i]);
+			ConvertFixedArg(_tempCtorArgBlob, reader, paramType, true);
+		}
+
+		uint16_t numNamed = reader.Read16();
+
+		uint32_t fieldCount = 0;
+		uint32_t propertyCount = 0;
+		_tempFieldBlob.Reset();
+		_tempPropertyBlob.Reset();
+		const Il2CppTypeDefinition* declaringType = GetUnderlyingTypeDefinition(&ctorMethod->klass->byval_arg);
+		for (uint16_t idx = 0; idx < numNamed; idx++)
+		{
+			byte fieldOrPropTypeTag = reader.ReadByte();
+			IL2CPP_ASSERT(fieldOrPropTypeTag == 0x53 || fieldOrPropTypeTag == 0x54);
+			Il2CppType fieldOrPropType = {};
+			ReadCustomAttributeFieldOrPropType(reader, fieldOrPropType);
+			Il2CppString* fieldOrPropName = ReadSerString(reader);
+			std::string stdStrName = il2cpp::utils::StringUtils::Utf16ToUtf8(fieldOrPropName->chars);
+			const char* cstrName = stdStrName.c_str();
+			int32_t fieldOrPropertyDeclaringTypeIndex = kTypeIndexInvalid;
+			int32_t fieldOrPropertyIndex = 0;
+			if (fieldOrPropTypeTag == 0x53)
+			{
+				++fieldCount;
+				ConvertFixedArg(_tempFieldBlob, reader, &fieldOrPropType, true);
+				GetFieldDeclaringTypeIndexAndFieldIndexByName(declaringType, cstrName, fieldOrPropertyDeclaringTypeIndex, fieldOrPropertyIndex);
+				if (fieldOrPropertyDeclaringTypeIndex == kTypeDefinitionIndexInvalid)
+				{
+					_tempFieldBlob.WriteCompressedInt32(fieldOrPropertyIndex);
+				}
+				else
+				{
+					_tempFieldBlob.WriteCompressedInt32(-fieldOrPropertyIndex - 1);
+					_tempFieldBlob.WriteCompressedInt32(fieldOrPropertyDeclaringTypeIndex);
+				}
+			}
+			else
+			{
+				++propertyCount;
+				ConvertFixedArg(_tempPropertyBlob, reader, &fieldOrPropType, true);
+				GetPropertyDeclaringTypeIndexAndPropertyIndexByName(declaringType, cstrName, fieldOrPropertyDeclaringTypeIndex, fieldOrPropertyIndex);
+				if (fieldOrPropertyDeclaringTypeIndex == kTypeDefinitionIndexInvalid)
+				{
+					_tempPropertyBlob.WriteCompressedInt32(fieldOrPropertyIndex);
+				}
+				else
+				{
+					_tempPropertyBlob.WriteCompressedInt32(-fieldOrPropertyIndex - 1);
+					_tempPropertyBlob.WriteCompressedInt32(fieldOrPropertyDeclaringTypeIndex);
+				}
+			}
+		}
+		_il2cppFormatCustomDataBlob.WriteCompressedUint32(ctorMethod->parameters_count);
+		_il2cppFormatCustomDataBlob.WriteCompressedUint32(fieldCount);
+		_il2cppFormatCustomDataBlob.WriteCompressedUint32(propertyCount);
+		_il2cppFormatCustomDataBlob.Write(_tempCtorArgBlob);
+		_il2cppFormatCustomDataBlob.Write(_tempFieldBlob);
+		_il2cppFormatCustomDataBlob.Write(_tempPropertyBlob);
+	}
+
+#if !HYBRIDCLR_UNITY_2022_OR_NEW
 	CustomAttributesCache* InterpreterImage::GenerateCustomAttributesCacheInternal(CustomAttributeIndex index)
 	{
 		IL2CPP_ASSERT(index != kCustomAttributeIndexInvalid);
@@ -609,7 +1029,6 @@ namespace metadata
 
 		Il2CppCustomAttributeTypeRange& typeRange = _customAttributeHandles[index];
 
-		il2cpp::os::FastAutoLock metaLock(&il2cpp::vm::g_MetadataLock);
 		cache = _customAttribtesCaches[index];
 		if (cache)
 		{
@@ -618,84 +1037,50 @@ namespace metadata
 
 		hybridclr::interpreter::ExecutingInterpImageScope scope(hybridclr::interpreter::InterpreterModule::GetCurrentThreadMachineState(), this->_il2cppImage);
 
+		void* start;
+		void* end;
+		std::tie(start, end) = CreateCustomAttributeDataTuple(&typeRange);
+		IL2CPP_ASSERT(start && end);
+
+		il2cpp::metadata::CustomAttributeDataReader reader(start, end);
+
 		cache = (CustomAttributesCache*)IL2CPP_CALLOC(1, sizeof(CustomAttributesCache));
-		int32_t count;
-#ifdef HYBRIDCLR_UNITY_2021_OR_NEW
-		count = (int32_t)(_customAttributeHandles[index + 1].startOffset - typeRange.startOffset);
-#else
-		count = (int32_t)typeRange.count;
-#endif
-		cache->count = count;
-		cache->attributes = (Il2CppObject**)il2cpp::gc::GarbageCollector::AllocateFixed(sizeof(Il2CppObject*) * count, 0);
+		cache->count = (int)reader.GetCount();
+		cache->attributes = (Il2CppObject**)il2cpp::gc::GarbageCollector::AllocateFixed(sizeof(Il2CppObject*) * cache->count, 0);
 
-		int32_t start = DecodeMetadataIndex(GET_CUSTOM_ATTRIBUTE_TYPE_RANGE_START(typeRange));
-		for (int32_t i = 0; i < count; i++)
+		il2cpp::metadata::CustomAttributeDataIterator iter = reader.GetDataIterator();
+		for (int i = 0; i < cache->count; i++)
 		{
-			int32_t attrIndex = start + i;
-			IL2CPP_ASSERT(attrIndex >= 0 && attrIndex < (int32_t)_customAttribues.size());
-			CustomAttribute& ca = _customAttribues[attrIndex];
-			MethodRefInfo mri = {};
-			ReadMethodRefInfoFromToken(nullptr, nullptr, DecodeTokenTableType(ca.ctorMethodToken), DecodeTokenRowIndex(ca.ctorMethodToken), mri);
-			const MethodInfo* ctorMethod = GetMethodInfoFromMethodDef(&mri.containerType, mri.methodDef);
-			IL2CPP_ASSERT(ctorMethod);
-			Il2CppClass* klass = ctorMethod->klass;
-			Il2CppObject* attr = il2cpp::vm::Object::New(klass);
-			Il2CppArray* paramArr = nullptr;
-			if (ca.value != 0)
+			Il2CppException* exc = NULL;
+			il2cpp::metadata::CustomAttributeCreator creator;
+			if (reader.VisitCustomAttributeData(_il2cppImage, &iter, &creator, &exc))
 			{
-				BlobReader reader = _rawImage.GetBlobReaderByRawIndex(ca.value);
-				ConstructCustomAttribute(reader, attr, ctorMethod);
-			}
-			else
-			{
-				IL2CPP_ASSERT(ctorMethod->parameters_count == 0);
-				il2cpp::vm::Runtime::Invoke(ctorMethod, attr, nullptr, nullptr);
+				cache->attributes[i] = creator.GetAttribute(&exc);
+				il2cpp::gc::GarbageCollector::SetWriteBarrier((void**)&cache->attributes[i]);
 			}
 
-			cache->attributes[i] = attr;
-			il2cpp::gc::GarbageCollector::SetWriteBarrier((void**)cache->attributes + i);
+			if (exc != NULL)
+			{
+				il2cpp::gc::GarbageCollector::FreeFixed(cache->attributes);
+				IL2CPP_FREE(cache);
+				il2cpp::vm::Exception::Raise(exc);
+			}
 		}
 
+
+		il2cpp::os::FastAutoLock metaLock(&il2cpp::vm::g_MetadataLock);
+		CustomAttributesCache* original = _customAttribtesCaches[index];
+		if (original)
+		{
+			// A non-NULL return value indicates some other thread already generated this cache.
+			// We need to cleanup the resources we allocated
+			il2cpp::gc::GarbageCollector::FreeFixed(cache->attributes);
+			IL2CPP_FREE(cache);
+			return original;
+		}
 		il2cpp::os::Atomic::FullMemoryBarrier();
 		_customAttribtesCaches[index] = cache;
 		return cache;
-	}
-
-#ifdef HYBRIDCLR_UNITY_2021_OR_NEW
-	Il2CppArray* InterpreterImage::GetCustomAttributesDataInternal(uint32_t token)
-	{
-		CustomAttributeIndex index = DecodeMetadataIndex(GetCustomAttributeIndex(token));
-		if (index == kCustomAttributeIndexInvalid)
-		{
-			return il2cpp::vm::Array::New(il2cpp_defaults.customattribute_data_class, 0);
-		}
-
-		IL2CPP_ASSERT(index < (CustomAttributeIndex)_customAttributeHandles.size());
-
-		Il2CppCustomAttributeTypeRange& typeRange = _customAttributeHandles[index];
-
-		hybridclr::interpreter::ExecutingInterpImageScope scope(hybridclr::interpreter::InterpreterModule::GetCurrentThreadMachineState(), this->_il2cppImage);
-
-		int32_t count = (int32_t)(_customAttributeHandles[index + 1].startOffset - typeRange.startOffset);
-		Il2CppArray* result = il2cpp::vm::Array::New(il2cpp_defaults.customattribute_data_class, count);
-
-		int32_t start = DecodeMetadataIndex(GET_CUSTOM_ATTRIBUTE_TYPE_RANGE_START(typeRange));
-		for (int32_t i = 0; i < count; i++)
-		{
-			int32_t attrIndex = start + i;
-			IL2CPP_ASSERT(attrIndex >= 0 && attrIndex < (int32_t)_customAttribues.size());
-			CustomAttribute& ca = _customAttribues[attrIndex];
-			MethodRefInfo mri = {};
-			ReadMethodRefInfoFromToken(nullptr, nullptr, DecodeTokenTableType(ca.ctorMethodToken), DecodeTokenRowIndex(ca.ctorMethodToken), mri);
-			const MethodInfo* ctorMethod = GetMethodInfoFromMethodDef(&mri.containerType, mri.methodDef);
-			IL2CPP_ASSERT(ctorMethod);
-			Il2CppClass* klass = ctorMethod->klass;
-			BlobReader reader = ca.value != 0 ? _rawImage.GetBlobReaderByRawIndex(ca.value) : BlobReader(nullptr, 0);
-			il2cpp::metadata::LazyCustomAttributeData data = {ctorMethod, reader.GetData(), reader.GetLength()};
-			Il2CppObject* attributeData = il2cpp::icalls::mscorlib::System::MonoCustomAttrs::CreateCustomAttributeData(il2cpp_defaults.corlib->assembly, data);
-			il2cpp_array_setref(result, i, attributeData);
-		}
-		return result;
 	}
 #endif
 
@@ -852,10 +1237,8 @@ namespace metadata
 		{
 			TbProperty data = _rawImage.ReadProperty(rowIndex);
 			_propeties.push_back({ _rawImage.GetStringFromRawIndex(data.name), data.flags, data.type, 0, 0
-#if HYBRIDCLR_UNITY_2019
 				, nullptr
 				, { (StringIndex)EncodeWithIndex(data.name), kMethodIndexInvalid, kMethodIndexInvalid, (uint32_t)data.flags, EncodeToken(TableType::PROPERTY, rowIndex)}
-#endif
 				});
 		}
 
@@ -875,19 +1258,6 @@ namespace metadata
 		{
 			last->property_count = propertyTb.rowNum - DecodeMetadataIndex(last->propertyStart) + 1;
 		}
-#if HYBRIDCLR_UNITY_2019
-		for (const TypeDefinitionDetail& tdd : _typeDetails)
-		{
-			if (tdd.typeDef->property_count == 0)
-			{
-				continue;
-			}
-			for (int32_t start = DecodeMetadataIndex(tdd.typeDef->propertyStart), i = 0; i < tdd.typeDef->property_count; i++)
-			{
-				_propeties[start + i - 1].declaringType = tdd.typeDef;
-			}
-		}
-#endif
 	}
 
 	void InterpreterImage::InitEvents()
@@ -899,12 +1269,7 @@ namespace metadata
 		for (uint32_t rowIndex = 1; rowIndex <= eventTb.rowNum; rowIndex++)
 		{
 			TbEvent data = _rawImage.ReadEvent(rowIndex);
-			_events.push_back({ _rawImage.GetStringFromRawIndex(data.name), data.eventFlags, data.eventType, 0, 0, 0
-#if HYBRIDCLR_UNITY_2019
-				, nullptr
-				, { (StringIndex)EncodeWithIndex(data.name), kTypeIndexInvalid, kMethodIndexInvalid, kMethodIndexInvalid, kMethodIndexInvalid, EncodeToken(TableType::EVENT, rowIndex)}
-#endif
-				});
+			_events.push_back({ _rawImage.GetStringFromRawIndex(data.name), data.eventFlags, data.eventType, 0, 0, 0});
 		}
 
 		Il2CppTypeDefinition* last = nullptr;
@@ -923,21 +1288,6 @@ namespace metadata
 		{
 			last->event_count = eventTb.rowNum - DecodeMetadataIndex(last->eventStart) + 1;
 		}
-#if HYBRIDCLR_UNITY_2019
-		for (const TypeDefinitionDetail& tdd : _typeDetails)
-		{
-			if (tdd.typeDef->event_count == 0)
-			{
-				continue;
-			}
-			for (int32_t start = DecodeMetadataIndex(tdd.typeDef->eventStart), i = 0; i < tdd.typeDef->event_count; i++)
-			{
-				EventDetail& ed = _events[start + i - 1];
-				ed.declaringType = tdd.typeDef;
-				ed.il2cppDefinition.typeIndex = tdd.typeDef->byvalTypeIndex;
-			}
-		}
-#endif
 	}
 
 
@@ -955,45 +1305,30 @@ namespace metadata
 			{
 				IL2CPP_ASSERT(tableType == TableType::PROPERTY);
 				PropertyDetail& pd = _propeties[propertyOrEventIndex];
-#if HYBRIDCLR_UNITY_2019
-				pd.il2cppDefinition.get = method - DecodeMetadataIndex(pd.declaringType->methodStart) - 1;
-#endif
 				pd.getterMethodIndex = method;
 			}
 			if (semantics & (uint16_t)MethodSemanticsAttributes::Setter)
 			{
 				IL2CPP_ASSERT(tableType == TableType::PROPERTY);
 				PropertyDetail& pd = _propeties[propertyOrEventIndex];
-#if HYBRIDCLR_UNITY_2019
-				pd.il2cppDefinition.set = method - DecodeMetadataIndex(pd.declaringType->methodStart) - 1;
-#endif
 				pd.setterMethodIndex = method;
 			}
 			if (semantics & (uint16_t)MethodSemanticsAttributes::AddOn)
 			{
 				IL2CPP_ASSERT(tableType == TableType::EVENT);
 				EventDetail& ed = _events[propertyOrEventIndex];
-#if HYBRIDCLR_UNITY_2019
-				ed.il2cppDefinition.add = method - DecodeMetadataIndex(ed.declaringType->methodStart) - 1;
-#endif
 				ed.addMethodIndex = method;
 			}
 			if (semantics & (uint16_t)MethodSemanticsAttributes::RemoveOn)
 			{
 				IL2CPP_ASSERT(tableType == TableType::EVENT);
 				EventDetail& ed = _events[propertyOrEventIndex];
-#if HYBRIDCLR_UNITY_2019
-				ed.il2cppDefinition.remove = method - DecodeMetadataIndex(ed.declaringType->methodStart) - 1;
-#endif
 				ed.removeMethodIndex = method;
 			}
 			if (semantics & (uint16_t)MethodSemanticsAttributes::Fire)
 			{
 				IL2CPP_ASSERT(tableType == TableType::EVENT);
 				EventDetail& ed = _events[propertyOrEventIndex];
-#if HYBRIDCLR_UNITY_2019
-				ed.il2cppDefinition.raise = method - DecodeMetadataIndex(ed.declaringType->methodStart) - 1;
-#endif
 				ed.fireMethodIndex = method;
 			}
 		}
@@ -1068,8 +1403,16 @@ namespace metadata
 
 			auto& sizes = type.typeSizes;
 			sizes.native_size = layout->nativeSize;
-			sizes.static_fields_size = layout->staticFieldsSize;
-			sizes.thread_static_fields_size = layout->threadStaticFieldsSize;
+			if (typeDef->genericContainerIndex == kGenericContainerIndexInvalid)
+			{
+				sizes.static_fields_size = layout->staticFieldsSize;
+				sizes.thread_static_fields_size = layout->threadStaticFieldsSize;
+			}
+			else
+			{
+				sizes.static_fields_size = 0;
+				sizes.thread_static_fields_size = 0;
+			}
 			if (sizes.instance_size == 0)
 			{
 				sizes.instance_size = layout->instanceSize;
@@ -1096,7 +1439,7 @@ namespace metadata
 		}
 	}
 
-	uint32_t InterpreterImage::AddIl2CppTypeCache(Il2CppType& type)
+	uint32_t InterpreterImage::AddIl2CppTypeCache(const Il2CppType& type)
 	{
 		auto it = _type2Indexs.find(type);
 		if (it != _type2Indexs.end())
@@ -1428,7 +1771,8 @@ namespace metadata
 			e.second->~VTableSetUp();
 			IL2CPP_FREE(e.second);
 		}
-		_cacheTrees.clear();
+		Il2CppType2TypeDeclaringTreeMap temp;
+		_cacheTrees.swap(temp);
 	}
 
 	// index => MethodDefinition -> DeclaringClass -> index - klass->methodStart -> MethodInfo*
@@ -1548,7 +1892,33 @@ namespace metadata
 		else
 		{
 			uint32_t len = reader.ReadCompressedUint32();
-			return il2cpp::vm::String::NewLen((char*)reader.GetAndSkipCurBytes(len), len);
+			char* chars = (char*)reader.GetDataOfReadPosition();
+			reader.SkipBytes(len);
+			return il2cpp::vm::String::NewLen(chars, len);
+		}
+	}
+
+	bool InterpreterImage::ReadUTF8SerString(BlobReader& reader, std::string& s)
+	{
+		byte b = reader.PeekByte();
+		if (b == 0xFF)
+		{
+			reader.SkipByte();
+			return false;
+		}
+		else if (b == 0)
+		{
+			reader.SkipByte();
+			s.clear();
+			return true;
+		}
+		else
+		{
+			uint32_t len = reader.ReadCompressedUint32();
+			char* chars = (char*)reader.GetDataOfReadPosition();
+			reader.SkipBytes(len);
+			s.assign(chars, len);
+			return true;
 		}
 	}
 
@@ -1776,85 +2146,6 @@ namespace metadata
 		}
 	}
 
-	void InterpreterImage::ConstructCustomAttribute(BlobReader& reader, Il2CppObject* obj, const MethodInfo* ctorMethod)
-	{
-		uint16_t prolog = reader.Read16();
-		IL2CPP_ASSERT(prolog == 0x0001);
-		if (ctorMethod->parameters_count == 0)
-		{
-			il2cpp::vm::Runtime::Invoke(ctorMethod, obj, nullptr, nullptr);
-		}
-		else
-		{
-			int32_t argSize = sizeof(uint64_t) * ctorMethod->parameters_count;
-			uint64_t* argDatas = (uint64_t*)alloca(argSize);
-			std::memset(argDatas, 0, argSize);
-			void** argPtrs = (void**)alloca(sizeof(void*) * ctorMethod->parameters_count); // same with argDatas
-			for (uint8_t i = 0; i < ctorMethod->parameters_count; i++)
-			{
-				argPtrs[i] = argDatas + i;
-				const Il2CppType* paramType = GET_METHOD_PARAMETER_TYPE(ctorMethod->parameters[i]);
-				ReadFixedArg(reader, paramType, argDatas + i);
-				Il2CppClass* paramKlass = il2cpp::vm::Class::FromIl2CppType(paramType);
-				if (!IS_CLASS_VALUE_TYPE(paramKlass))
-				{
-					argPtrs[i] = (void*)argDatas[i];
-				}
-			}
-			il2cpp::vm::Runtime::Invoke(ctorMethod, obj, argPtrs, nullptr);
-			// clear ref. may not need. gc memory barrier
-			std::memset(argDatas, 0, argSize);
-		}
-		uint16_t numNamed = reader.Read16();
-		Il2CppClass* klass = obj->klass;
-		for (uint16_t idx = 0; idx < numNamed; idx++)
-		{
-			byte fieldOrPropTypeTag = reader.ReadByte();
-			IL2CPP_ASSERT(fieldOrPropTypeTag == 0x53 || fieldOrPropTypeTag == 0x54);
-			Il2CppType fieldOrPropType = {};
-			ReadCustomAttributeFieldOrPropType(reader, fieldOrPropType);
-			Il2CppString* fieldOrPropName = ReadSerString(reader);
-			std::string stdStrName = il2cpp::utils::StringUtils::Utf16ToUtf8(fieldOrPropName->chars);
-			const char* cstrName = stdStrName.c_str();
-			uint64_t value = 0;
-			ReadFixedArg(reader, &fieldOrPropType, &value);
-			if (fieldOrPropTypeTag == 0x53)
-			{
-				FieldInfo* field = il2cpp::vm::Class::GetFieldFromName(klass, cstrName);
-				if (!field)
-				{
-					TEMP_FORMAT(errMsg, "CustomAttribute field missing. klass:%s.%s field:%s", klass->namespaze, klass->name, cstrName);
-					il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetTypeInitializationException(errMsg, nullptr));
-				}
-				Il2CppReflectionField* refField = il2cpp::vm::Reflection::GetFieldObject(klass, field);
-				IL2CPP_ASSERT(IsTypeEqual(&fieldOrPropType, field->type));
-				uint32_t fieldSize = GetTypeValueSize(&fieldOrPropType);
-				std::memcpy((byte*)obj + field->offset, &value, fieldSize);
-				//fixme MEMORY BARRIER
-				IL2CPP_ASSERT(refField);
-			}
-			else
-			{
-				const PropertyInfo* prop = il2cpp::vm::Class::GetPropertyFromName(klass, cstrName);
-				if (!prop)
-				{
-					TEMP_FORMAT(errMsg, "CustomAttribute property missing. klass:%s property:%s", klass->name, cstrName);
-					il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetTypeInitializationException(errMsg, nullptr));
-				}
-				IL2CPP_ASSERT(IsTypeEqual(&fieldOrPropType, GET_METHOD_PARAMETER_TYPE(prop->set->parameters[0])));
-				Il2CppException* ex = nullptr;
-				Il2CppClass* propKlass = il2cpp::vm::Class::FromIl2CppType(&fieldOrPropType);
-				IL2CPP_ASSERT(propKlass);
-				void* args[] = { (IS_CLASS_VALUE_TYPE(propKlass) ? &value : (void*)value) };
-				il2cpp::vm::Runtime::Invoke(prop->set, obj, args, &ex);
-				if (ex)
-				{
-					il2cpp::vm::Exception::Raise(ex);
-				}
-			}
-		}
-	}
-
 	void InterpreterImage::ReadMethodDefSig(BlobReader& reader, const Il2CppGenericContainer* klassGenericContainer, const Il2CppGenericContainer* methodGenericContainer, Il2CppMethodDefinition& methodDef, std::vector<ParamDetail>& paramArr)
 	{
 		uint8_t rawSigFlags = reader.ReadByte();
@@ -1890,11 +2181,11 @@ namespace metadata
 	bool InterpreterImage::GetModuleIl2CppType(Il2CppType& resultType, uint32_t moduleRowIndex, uint32_t typeNamespace, uint32_t typeName, bool raiseExceptionIfNotFound)
 	{
 		IL2CPP_ASSERT(moduleRowIndex == 1);
-		const char* typeNameStr = _rawImage.GetStringFromRawIndex(typeName);
-		const char* typeNamespaceStr = _rawImage.GetStringFromRawIndex(typeNamespace);
+		uint32_t encodedNamespaceIndex = EncodeWithIndex(typeNamespace);
+		uint32_t encodedNameIndex = EncodeWithIndex(typeName);
 		for (TypeDefinitionDetail& type : _typeDetails)
 		{
-			if (type.typeDef->namespaceIndex == typeNamespace && type.typeDef->nameIndex == typeName)
+			if (type.typeDef->namespaceIndex == encodedNamespaceIndex && type.typeDef->nameIndex == encodedNameIndex)
 			{
 				GetIl2CppTypeFromTypeDefinition(type.typeDef, resultType);
 				return true;
@@ -1905,6 +2196,8 @@ namespace metadata
 		{
 			return false;
 		}
+		const char* typeNameStr = _rawImage.GetStringFromRawIndex(typeName);
+		const char* typeNamespaceStr = _rawImage.GetStringFromRawIndex(typeNamespace);
 		il2cpp::vm::Exception::Raise(il2cpp::vm::Exception::GetTypeLoadException(
 			CStringToStringView(typeNamespaceStr),
 			CStringToStringView(typeNameStr),
