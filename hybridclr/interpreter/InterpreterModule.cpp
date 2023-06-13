@@ -213,10 +213,12 @@ namespace hybridclr
 			{
 				thisPtr = localVarBase[argVarIndexs[0]].obj;
 				argVarIndexBase = argVarIndexs + 1;
+#if HYBRIDCLR_UNITY_2020
 				if (IS_CLASS_VALUE_TYPE(method->klass))
 				{
 					thisPtr = (Il2CppObject*)thisPtr - 1;
 				}
+#endif
 			}
 			else
 			{
@@ -339,6 +341,7 @@ namespace hybridclr
 				{
 					il2cpp::vm::Exception::RaiseNullReferenceException();
 				}
+				curTarget += (IS_CLASS_VALUE_TYPE(curMethod->klass));
 				curMethod->invoker_method(curMethod->methodPointer, curMethod, curTarget, __args, __ret);
 				break;
 			}
