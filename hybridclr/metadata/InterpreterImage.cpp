@@ -136,9 +136,6 @@ namespace metadata
 		InitInterfaces();
 		InitClass();
 		InitVTables();
-#if HYBRIDCLR_UNITY_2021_OR_NEW
-		BuildCustomAttributeDataReaders();
-#endif
 	}
 
 	void InterpreterImage::InitTypeDefs_0()
@@ -626,11 +623,7 @@ namespace metadata
 				IL2CPP_ASSERT(_tokenCustomAttributes.find(token) == _tokenCustomAttributes.end());
 				int32_t attributeStartIndex = EncodeWithIndex((int32_t)_customAttribues.size());
 				int32_t handleIndex = (int32_t)_customAttributeHandles.size();
-#if HYBRIDCLR_UNITY_2021_OR_NEW
-				_tokenCustomAttributes[token] = { (int32_t)EncodeWithIndex(handleIndex) };
-#else
-				_tokenCustomAttributes[token] = { (int32_t)EncodeWithIndex(handleIndex), 0, 0 };
-#endif
+				_tokenCustomAttributes[token] = { (int32_t)EncodeWithIndex(handleIndex), false, nullptr, nullptr };
 #ifdef HYBRIDCLR_UNITY_2021_OR_NEW
 				_customAttributeHandles.push_back({ token, (uint32_t)attributeStartIndex });
 #else
@@ -678,22 +671,23 @@ namespace metadata
 	}
 
 #ifdef HYBRIDCLR_UNITY_2021_OR_NEW
-	void InterpreterImage::BuildCustomAttributeDataReaders()
+
+	void InterpreterImage::InitCustomAttributeData(CustomAttributesInfo& cai, const Il2CppCustomAttributeTypeRange& dataRange)
 	{
-		for (size_t i = 1 ; i < _customAttributeHandles.size() ; i++)
+		il2cpp::os::FastAutoLock metaLock(&il2cpp::vm::g_MetadataLock);
+		if (cai.inited)
 		{
-			// ignore last one ofr comput count
-			const Il2CppCustomAttributeTypeRange& typeRange = _customAttributeHandles[i - 1];
-			uint32_t token = typeRange.token;
-			IL2CPP_ASSERT(_tokenCustomAttributes.find(token) != _tokenCustomAttributes.end());
-			CustomAtttributesInfo& cai = _tokenCustomAttributes[token];
-			BuildCustomAttributesData(cai, typeRange);
+			return;
 		}
+		BuildCustomAttributesData(cai, dataRange);
+		il2cpp::os::Atomic::FullMemoryBarrier();
+		cai.inited = true;
 	}
 
-	void InterpreterImage::BuildCustomAttributesData(CustomAtttributesInfo& cai, const Il2CppCustomAttributeTypeRange& curTypeRange)
+	void InterpreterImage::BuildCustomAttributesData(CustomAttributesInfo& cai, const Il2CppCustomAttributeTypeRange& curTypeRange)
 	{
-		cai.dataStartOffset = _il2cppFormatCustomDataBlob.Size();
+		hybridclr::interpreter::ExecutingInterpImageScope scope(hybridclr::interpreter::InterpreterModule::GetCurrentThreadMachineState(), this->_il2cppImage);
+		_il2cppFormatCustomDataBlob.Reset();
 		const Il2CppCustomAttributeDataRange& nextTypeRange = *(&curTypeRange + 1);
 		uint32_t attrCount = nextTypeRange.startOffset - curTypeRange.startOffset;
 		IL2CPP_ASSERT(attrCount > 0 && attrCount < 1024);
@@ -723,16 +717,24 @@ namespace metadata
 				_il2cppFormatCustomDataBlob.WriteCompressedUint32(0);
 			}
 		}
-		cai.dataEndOffset = _il2cppFormatCustomDataBlob.Size();
+		void* resultData = IL2CPP_MALLOC(_il2cppFormatCustomDataBlob.Size());
+		std::memcpy(resultData, _il2cppFormatCustomDataBlob.Data(), _il2cppFormatCustomDataBlob.Size());
+		cai.dataStartPtr = resultData;
+		cai.dataEndPtr = (uint8_t*)resultData + _il2cppFormatCustomDataBlob.Size();
 	}
 
 	void InterpreterImage::WriteEncodeTypeEnum(CustomAttributeDataWriter& writer, const Il2CppType* type)
 	{
-		if (il2cpp::vm::Type::IsEnum(type) || type->type == IL2CPP_TYPE_ENUM)
+		Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type);
+		if (type->type == IL2CPP_TYPE_ENUM || klass->enumtype)
 		{
 			writer.WriteByte((byte)IL2CPP_TYPE_ENUM);
 			int32_t typeIndex = type->type == IL2CPP_TYPE_CLASS || type->type == IL2CPP_TYPE_VALUETYPE ? ((Il2CppTypeDefinition*)type->data.typeHandle)->byvalTypeIndex : AddIl2CppTypeCache(*type);
 			writer.WriteCompressedInt32(typeIndex);
+		}
+		else if (klass == il2cpp_defaults.systemtype_class)
+		{
+			writer.WriteByte((byte)IL2CPP_TYPE_IL2CPP_TYPE_INDEX);
 		}
 		else
 		{
@@ -742,10 +744,6 @@ namespace metadata
 
 	void InterpreterImage::ConvertBoxedValue(CustomAttributeDataWriter& writer, BlobReader& reader, bool writeType)
 	{
-		if (writeType)
-		{
-			writer.WriteByte((byte)IL2CPP_TYPE_OBJECT);
-		}
 		uint64_t obj = 0;
 		Il2CppType kind = {};
 		ReadCustomAttributeFieldOrPropType(reader, kind);
@@ -784,16 +782,16 @@ namespace metadata
 
 	void InterpreterImage::ConvertFixedArg(CustomAttributeDataWriter& writer, BlobReader& reader, const Il2CppType* type, bool writeType)
 	{
-		if (writeType)
-		{
-			writer.WriteByte((uint8_t)type->type);
-		}
 		switch (type->type)
 		{
 		case IL2CPP_TYPE_BOOLEAN:
 		case IL2CPP_TYPE_I1:
 		case IL2CPP_TYPE_U1:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			writer.Write(reader, 1);
 			break;
 		}
@@ -801,21 +799,37 @@ namespace metadata
 		case IL2CPP_TYPE_I2:
 		case IL2CPP_TYPE_U2:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			writer.Write(reader, 2);
 			break;
 		}
 		case IL2CPP_TYPE_I4:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			writer.WriteCompressedInt32((int32_t)reader.Read32());
 			break;
 		}
 		case IL2CPP_TYPE_U4:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			writer.WriteCompressedUint32(reader.Read32());
 			break;
 		}
 		case IL2CPP_TYPE_R4:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			writer.Write(reader, 4);
 			break;
 		}
@@ -823,11 +837,19 @@ namespace metadata
 		case IL2CPP_TYPE_U8:
 		case IL2CPP_TYPE_R8:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			writer.Write(reader, 8);
 			break;
 		}
 		case IL2CPP_TYPE_SZARRAY:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			int32_t numElem = (int32_t)reader.Read32();
 			writer.WriteCompressedInt32(numElem);
 			if (numElem != -1)
@@ -860,6 +882,10 @@ namespace metadata
 		}
 		case IL2CPP_TYPE_STRING:
 		{
+			if (writeType)
+			{
+				writer.WriteByte((uint8_t)type->type);
+			}
 			byte b = reader.PeekByte();
 			if (b == 0xFF)
 			{
@@ -883,10 +909,6 @@ namespace metadata
 		}
 		case IL2CPP_TYPE_OBJECT:
 		{
-			if (writeType)
-			{
-				writer.PopByte();
-			}
 			ConvertBoxedValue(writer, reader, writeType);
 			//*(Il2CppObject**)data = ReadBoxedValue(reader);
 			// FIXME memory barrier
@@ -894,10 +916,6 @@ namespace metadata
 		}
 		case IL2CPP_TYPE_CLASS:
 		{
-			if (writeType)
-			{
-				writer.PopByte();
-			}
 			Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type);
 			if (!klass)
 			{
@@ -909,7 +927,7 @@ namespace metadata
 			}
 			else if (klass == il2cpp_defaults.systemtype_class)
 			{
-				ConvertSystemType(writer, reader, true);
+				ConvertSystemType(writer, reader, writeType);
 			}
 			else
 			{
@@ -923,7 +941,7 @@ namespace metadata
 			Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type);
 			if (writeType)
 			{
-				writer.ReplaceLastByte((byte)IL2CPP_TYPE_ENUM);
+				writer.WriteByte((byte)IL2CPP_TYPE_ENUM);
 				IL2CPP_ASSERT(klass->enumtype);
 				int32_t typeIndex = klass->generic_class ? AddIl2CppTypeCache(*type) : ((Il2CppTypeDefinition*)type->data.typeHandle)->byvalTypeIndex;
 				writer.WriteCompressedInt32(typeIndex);
@@ -933,10 +951,6 @@ namespace metadata
 		}
 		case IL2CPP_TYPE_SYSTEM_TYPE:
 		{
-			if (writeType)
-			{
-				writer.PopByte();
-			}
 			ConvertSystemType(writer, reader, true);
 			break;
 		}
@@ -951,8 +965,11 @@ namespace metadata
 		{
 			Il2CppClass* klass = il2cpp::vm::Class::FromIl2CppType(type);
 			IL2CPP_ASSERT(klass->enumtype);
-			int32_t typeIndex = klass->generic_class ? AddIl2CppTypeCache(*type) : ((Il2CppTypeDefinition*)type->data.typeHandle)->byvalTypeIndex;
-			writer.WriteCompressedInt32(typeIndex);
+			if (writeType)
+			{
+				int32_t typeIndex = klass->generic_class ? AddIl2CppTypeCache(*type) : ((Il2CppTypeDefinition*)type->data.typeHandle)->byvalTypeIndex;
+				writer.WriteCompressedInt32(typeIndex);
+			}
 			ConvertFixedArg(writer, reader, &klass->element_class->byval_arg, false);
 			break;
 		}
@@ -971,8 +988,20 @@ namespace metadata
 		{
 			RaiseExecutionEngineException("GetFieldDeclaringTypeIndexAndFieldIndexByName can't find field");
 		}
-		typeIndex = (field->parent == klass) ? kTypeDefinitionIndexInvalid : AddIl2CppTypeCache(klass->byval_arg);
-		fieldIndex = (int32_t)(field - field->parent->fields);
+		if (field->parent == klass)
+		{
+			typeIndex = kTypeDefinitionIndexInvalid;
+		}
+		else
+		{
+			klass = field->parent;
+			if (klass->generic_class)
+			{
+				RaiseExecutionEngineException("GetFieldDeclaringTypeIndexAndFieldIndexByName doesn't support field of generic CustomAttribute");
+			}
+			typeIndex = il2cpp::vm::GlobalMetadata::GetIndexForTypeDefinition(klass);
+		}
+		fieldIndex = (int32_t)(field - klass->fields);
 	}
 
 	void InterpreterImage::GetPropertyDeclaringTypeIndexAndPropertyIndexByName(const Il2CppTypeDefinition* declaringType, const char* name, int32_t& typeIndex, int32_t& fieldIndex)
@@ -983,8 +1012,20 @@ namespace metadata
 		{
 			RaiseExecutionEngineException("GetFieldDeclaringTypeIndexAndFieldIndexByName can't find field");
 		}
-		typeIndex = (propertyInfo->parent == klass) ? kTypeDefinitionIndexInvalid : AddIl2CppTypeCache(klass->byval_arg);
-		fieldIndex = (int32_t)(propertyInfo - propertyInfo->parent->properties);
+		if (propertyInfo->parent == klass)
+		{
+			typeIndex = kTypeDefinitionIndexInvalid;
+		}
+		else
+		{
+			klass = propertyInfo->parent;
+			if (klass->generic_class)
+			{
+				RaiseExecutionEngineException("GetPropertyDeclaringTypeIndexAndPropertyIndexByName doesn't support field of generic CustomAttribute");
+			}
+			typeIndex = il2cpp::vm::GlobalMetadata::GetIndexForTypeDefinition(klass);
+		}
+		fieldIndex = (int32_t)(propertyInfo - klass->properties);
 	}
 
 	void InterpreterImage::ConvertILCustomAttributeData2Il2CppFormat(const MethodInfo* ctorMethod, BlobReader& reader)
@@ -1030,7 +1071,7 @@ namespace metadata
 				else
 				{
 					_tempFieldBlob.WriteCompressedInt32(-fieldOrPropertyIndex - 1);
-					_tempFieldBlob.WriteCompressedInt32(fieldOrPropertyDeclaringTypeIndex);
+					_tempFieldBlob.WriteCompressedUint32(fieldOrPropertyDeclaringTypeIndex);
 				}
 			}
 			else
@@ -1045,7 +1086,7 @@ namespace metadata
 				else
 				{
 					_tempPropertyBlob.WriteCompressedInt32(-fieldOrPropertyIndex - 1);
-					_tempPropertyBlob.WriteCompressedInt32(fieldOrPropertyDeclaringTypeIndex);
+					_tempPropertyBlob.WriteCompressedUint32(fieldOrPropertyDeclaringTypeIndex);
 				}
 			}
 		}

@@ -40,7 +40,7 @@ namespace interpreter
 
 #pragma region memory
 
-#define LOCAL_ALLOC(size) interpFrameGroup.AllocLoc(size)
+#define LOCAL_ALLOC(size) interpFrameGroup.AllocLoc(size, imi->initLocals)
 
 #pragma endregion
 
@@ -1510,7 +1510,6 @@ while (true) \
 #define THROW_EX(_ex_, _firstHandlerIndex_) { \
 	Il2CppException* ex = _ex_; \
 	CHECK_NOT_NULL_THROW(ex); \
-	il2cpp::vm::Exception::Raise(ex, const_cast<MethodInfo*>(imi->method)); \
 	PREPARE_EXCEPTION(ex, _firstHandlerIndex_); \
 	FIND_NEXT_EX_HANDLER_OR_UNWIND(); \
 }
@@ -1518,20 +1517,6 @@ while (true) \
 	ExceptionFlowInfo* curExFlow = frame->GetCurExFlow(); \
 	IL2CPP_ASSERT(curExFlow->exFlowType == ExceptionFlowType::Catch); \
 	il2cpp::vm::Exception::Raise(curExFlow->ex, const_cast<MethodInfo*>(imi->method)); \
-}
-
-#define POP_CATCH_HANDLERS(leaveTarget)\
-{ \
-	for (ExceptionFlowInfo* prevExFlow; (prevExFlow = frame->GetPrevExFlow()) && prevExFlow->exFlowType == ExceptionFlowType::Catch ;) { \
-			InterpExceptionClause* prevIec = imi->exClauses[prevExFlow->nextExClauseIndex - 1]; \
-			if (!(prevIec->handlerBeginOffset <= leaveTarget && leaveTarget < prevIec->handlerEndOffset)) {	\
-					PopPrevExceptionFlowInfo(frame, nullptr); \
-			} \
-			else \
-			{ \
-				break; \
-			} \
-	}\
 }
 
 #define CONTINUE_NEXT_FINALLY() { \
@@ -1571,15 +1556,43 @@ ip = ipBase + efi->leaveTarget; \
 PopCurExceptionFlowInfo(frame); \
 }
 
+#define POP_PREV_CATCH_HANDLERS(leaveTarget)\
+{ \
+	for (ExceptionFlowInfo* prevExFlow; (prevExFlow = frame->GetPrevExFlow()) && prevExFlow->exFlowType == ExceptionFlowType::Catch ;) { \
+			InterpExceptionClause* prevIec = imi->exClauses[prevExFlow->nextExClauseIndex - 1]; \
+			if (!(prevIec->handlerBeginOffset <= leaveTarget && leaveTarget < prevIec->handlerEndOffset)) {	\
+					PopPrevExceptionFlowInfo(frame, nullptr); \
+			} \
+			else \
+			{ \
+				break; \
+			} \
+	}\
+}
+
 #define LEAVE_EX(target, firstHandlerIndex)  { \
 	PushExceptionFlowInfo(frame, machine, {ExceptionFlowType::Leave, (int32_t)(ip - ipBase), nullptr, firstHandlerIndex + 1, target}); \
 	InterpExceptionClause* iec = imi->exClauses[firstHandlerIndex]; \
-	POP_CATCH_HANDLERS(target); \
+	POP_PREV_CATCH_HANDLERS(target); \
 	ip = ipBase + iec->handlerBeginOffset; \
 }
 
+#define POP_CUR_CATCH_HANDLERS(leaveTarget)\
+{ \
+	for (ExceptionFlowInfo* prevExFlow; (prevExFlow = frame->GetCurExFlow()) && prevExFlow->exFlowType == ExceptionFlowType::Catch ;) { \
+			InterpExceptionClause* prevIec = imi->exClauses[prevExFlow->nextExClauseIndex - 1]; \
+			if (!(prevIec->handlerBeginOffset <= leaveTarget && leaveTarget < prevIec->handlerEndOffset)) {	\
+					PopCurExceptionFlowInfo(frame); \
+			} \
+			else \
+			{ \
+				break; \
+			} \
+	}\
+}
+
 #define LEAVE_EX_DIRECTLY(target)  { \
-	POP_CATCH_HANDLERS(target); \
+	POP_CUR_CATCH_HANDLERS(target); \
 	ip = ipBase + target; \
 }
 
@@ -10973,7 +10986,7 @@ else \
 					uint16_t __obj = *(uint16_t*)(ip + 2);
 					uint16_t __x = *(uint16_t*)(ip + 4);
 					uint16_t __y = *(uint16_t*)(ip + 6);
-				    *(HtVector2f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y))};
+				    *(HtVector2f*)(void*)(localVarBase + __obj) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y))};
 				    ip += 8;
 				    continue;
 				}
@@ -10982,7 +10995,7 @@ else \
 					uint16_t __obj = *(uint16_t*)(ip + 2);
 					uint16_t __x = *(uint16_t*)(ip + 4);
 					uint16_t __y = *(uint16_t*)(ip + 6);
-				    *(HtVector3f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), 0};
+				    *(HtVector3f*)(void*)(localVarBase + __obj) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), 0};
 				    ip += 8;
 				    continue;
 				}
@@ -10992,7 +11005,7 @@ else \
 					uint16_t __x = *(uint16_t*)(ip + 4);
 					uint16_t __y = *(uint16_t*)(ip + 6);
 					uint16_t __z = *(uint16_t*)(ip + 8);
-				    *(HtVector3f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), (*(float*)(localVarBase + __z))};
+				    *(HtVector3f*)(void*)(localVarBase + __obj) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), (*(float*)(localVarBase + __z))};
 				    ip += 16;
 				    continue;
 				}
@@ -11001,7 +11014,7 @@ else \
 					uint16_t __obj = *(uint16_t*)(ip + 2);
 					uint16_t __x = *(uint16_t*)(ip + 4);
 					uint16_t __y = *(uint16_t*)(ip + 6);
-				    *(HtVector4f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), 0, 0};
+				    *(HtVector4f*)(void*)(localVarBase + __obj) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), 0, 0};
 				    ip += 8;
 				    continue;
 				}
@@ -11011,11 +11024,69 @@ else \
 					uint16_t __x = *(uint16_t*)(ip + 4);
 					uint16_t __y = *(uint16_t*)(ip + 6);
 					uint16_t __z = *(uint16_t*)(ip + 8);
-				    *(HtVector4f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), (*(float*)(localVarBase + __z)), 0};
+				    *(HtVector4f*)(void*)(localVarBase + __obj) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), (*(float*)(localVarBase + __z)), 0};
 				    ip += 16;
 				    continue;
 				}
 				case HiOpcodeEnum::NewVector4_4:
+				{
+					uint16_t __obj = *(uint16_t*)(ip + 2);
+					uint16_t __x = *(uint16_t*)(ip + 4);
+					uint16_t __y = *(uint16_t*)(ip + 6);
+					uint16_t __z = *(uint16_t*)(ip + 8);
+					uint16_t __w = *(uint16_t*)(ip + 10);
+				    *(HtVector4f*)(void*)(localVarBase + __obj) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), (*(float*)(localVarBase + __z)), (*(float*)(localVarBase + __w))};
+				    ip += 16;
+				    continue;
+				}
+				case HiOpcodeEnum::CtorVector2:
+				{
+					uint16_t __obj = *(uint16_t*)(ip + 2);
+					uint16_t __x = *(uint16_t*)(ip + 4);
+					uint16_t __y = *(uint16_t*)(ip + 6);
+				    *(HtVector2f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y))};
+				    ip += 8;
+				    continue;
+				}
+				case HiOpcodeEnum::CtorVector3_2:
+				{
+					uint16_t __obj = *(uint16_t*)(ip + 2);
+					uint16_t __x = *(uint16_t*)(ip + 4);
+					uint16_t __y = *(uint16_t*)(ip + 6);
+				    *(HtVector3f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), 0};
+				    ip += 8;
+				    continue;
+				}
+				case HiOpcodeEnum::CtorVector3_3:
+				{
+					uint16_t __obj = *(uint16_t*)(ip + 2);
+					uint16_t __x = *(uint16_t*)(ip + 4);
+					uint16_t __y = *(uint16_t*)(ip + 6);
+					uint16_t __z = *(uint16_t*)(ip + 8);
+				    *(HtVector3f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), (*(float*)(localVarBase + __z))};
+				    ip += 16;
+				    continue;
+				}
+				case HiOpcodeEnum::CtorVector4_2:
+				{
+					uint16_t __obj = *(uint16_t*)(ip + 2);
+					uint16_t __x = *(uint16_t*)(ip + 4);
+					uint16_t __y = *(uint16_t*)(ip + 6);
+				    *(HtVector4f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), 0, 0};
+				    ip += 8;
+				    continue;
+				}
+				case HiOpcodeEnum::CtorVector4_3:
+				{
+					uint16_t __obj = *(uint16_t*)(ip + 2);
+					uint16_t __x = *(uint16_t*)(ip + 4);
+					uint16_t __y = *(uint16_t*)(ip + 6);
+					uint16_t __z = *(uint16_t*)(ip + 8);
+				    *(HtVector4f*)(*(void**)(localVarBase + __obj)) = {(*(float*)(localVarBase + __x)), (*(float*)(localVarBase + __y)), (*(float*)(localVarBase + __z)), 0};
+				    ip += 16;
+				    continue;
+				}
+				case HiOpcodeEnum::CtorVector4_4:
 				{
 					uint16_t __obj = *(uint16_t*)(ip + 2);
 					uint16_t __x = *(uint16_t*)(ip + 4);

@@ -1,5 +1,7 @@
 #include "Il2CppCompatibleDef.h"
 
+#include "vm/Runtime.h"
+
 #include "metadata/MetadataModule.h"
 #include "interpreter/InterpreterModule.h"
 
@@ -22,7 +24,11 @@ namespace hybridclr
 			{
 				method->virtualMethodPointerCallByInterp = method->methodPointerCallByInterp;
 			}
-			if (method->invoker_method == nullptr)
+			if (method->invoker_method == nullptr
+#if HYBRIDCLR_UNITY_2021_OR_NEW
+				|| method->invoker_method == il2cpp::vm::Runtime::GetMissingMethodInvoker()
+#endif
+				)
 			{
 				method->invoker_method = hybridclr::interpreter::InterpreterModule::GetMethodInvoker(method);
 			}
